@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sqlite3
 import time
@@ -19,6 +20,27 @@ from .runtime import (_ACTIVE_SEARCH_TIMELINE_ID, _profiled_sqlite_connect, log,
 from .sources.tripcom import (DEFAULT_TRIP_PROFILE, TRIP_EXECUTOR,
                               TRIP_PROFILE_LOCK, shutdown_tripcom_browser)
 from .sources.tripcom_rates import collect_tripcom_room_rates
+
+
+def _tripcom_source_city_id(database_path: str | Path, search_id: str,
+                            query_city_id: Any) -> str | None:
+    """Read Trip.com's own city id; Sravni geo ids are a different namespace."""
+    with closing(_profiled_sqlite_connect(str(database_path), timeout=10)) as connection:
+        row = connection.execute(
+            "SELECT raw_json FROM hotel_raw_page WHERE search_id=? AND source='trip_com' "
+            "ORDER BY page_index DESC,id DESC LIMIT 1",
+            (search_id,),
+        ).fetchone()
+    if row:
+        try:
+            raw_page = json.loads(row[0])
+        except (TypeError, json.JSONDecodeError):
+            raw_page = None
+        source_city_id = raw_page.get("sourceCityId") if isinstance(raw_page, dict) else None
+        if str(source_city_id or "").isdigit():
+            return str(source_city_id)
+    fallback = str(query_city_id or "")
+    return fallback if fallback.isdigit() else None
 
 
 async def enrich_tripcom_room_rates(
@@ -41,8 +63,11 @@ async def enrich_tripcom_room_rates(
     if wanted is not None and not wanted.issubset(available):
         raise HotelSearchOperationError("invalid_payload", "One or more hotel_ids are not in this search")
     query = result["query"]
+    trip_city_id = await asyncio.to_thread(
+        _tripcom_source_city_id, database_path, search_id, query.get("geo_id"),
+    )
     hotel_names = {str(hotel["source_hotel_id"]): hotel.get("name") for hotel in trip_hotels}
-    all_tasks = [{"source_hotel_id": hotel["source_hotel_id"], "city_id": query.get("geo_id"),
+    all_tasks = [{"source_hotel_id": hotel["source_hotel_id"], "city_id": trip_city_id,
                   "check_in": query["check_in"], "check_out": query["check_out"],
                   "adults": query["adults"], "children_count": query.get("children_count", 0)}
                  for hotel in trip_hotels]
