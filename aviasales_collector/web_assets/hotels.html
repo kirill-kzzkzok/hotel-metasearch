@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Отели — поиск и сравнение</title>
+  <link rel="stylesheet" href="/hotel-assets/hotels.css?v=2">
+  <link rel="stylesheet" href="/hotel-assets/hotel-results.css?v=7">
+  <link rel="stylesheet" href="/hotel-assets/leaflet.css">
+  <script src="/hotel-assets/leaflet.js" defer></script>
+  <script src="/hotel-assets/hotel_search_lifecycle.js?v=1" defer></script>
+  <script src="/hotel-assets/hotels.js?v=40" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/hotels">Отели <span>поиск и сравнение</span></a>
+    <a class="back-link" href="/">Авиабилеты</a>
+  </header>
+  <main>
+    <section class="search-panel" aria-label="Параметры поиска">
+      <form id="search-form">
+        <div class="field city-field">
+          <label for="city">Город или отель</label>
+          <input id="city" name="city" autocomplete="off" placeholder="Например, Дубай" required minlength="2">
+          <input id="geo-id" type="hidden">
+          <div id="city-options" class="suggestions" role="listbox" hidden></div>
+        </div>
+        <div class="field date-field">
+          <label for="check-in">Заезд</label>
+          <button id="check-in-trigger" class="date-trigger" type="button" aria-haspopup="dialog" aria-controls="date-calendar"></button>
+          <input id="check-in" type="date" hidden>
+        </div>
+        <div class="field date-field">
+          <label for="check-out">Выезд</label>
+          <button id="check-out-trigger" class="date-trigger" type="button" aria-haspopup="dialog" aria-controls="date-calendar"></button>
+          <input id="check-out" type="date" hidden>
+        </div>
+        <div class="field guest-field">
+          <label for="adults">Гости</label>
+          <div class="guest-inputs">
+            <input id="adults" type="number" min="1" max="12" value="2" aria-label="Взрослые">
+            <span>взрослых</span>
+            <input id="children" type="number" min="0" max="8" value="0" aria-label="Дети">
+            <span>детей</span>
+          </div>
+        </div>
+        <button class="search-button" type="submit"><span aria-hidden="true">⌕</span> Найти отели</button>
+      </form>
+      <div id="date-calendar" class="date-calendar" role="dialog" aria-label="Выбор дат поездки" hidden>
+        <div class="calendar-header">
+          <button id="calendar-prev" type="button" aria-label="Предыдущий месяц">‹</button>
+          <strong id="calendar-month-label"></strong>
+          <button id="calendar-next" type="button" aria-label="Следующий месяц">›</button>
+        </div>
+        <p id="calendar-selecting" class="calendar-selecting"></p>
+        <div id="calendar-months" class="calendar-months"></div>
+        <p id="calendar-range-summary" class="calendar-range-summary"></p>
+      </div>
+    </section>
+
+    <div id="notice" class="notice" role="status" hidden></div>
+    <section id="results-area" hidden>
+      <div class="results-heading">
+        <div>
+          <h1 id="results-title">Результаты поиска</h1>
+          <p id="results-meta" class="muted"></p>
+        </div>
+      </div>
+      <div class="results-workspace">
+        <aside class="filter-sidebar" aria-label="Фильтры отелей">
+          <h2>Фильтры</h2>
+          <section class="filter-group">
+            <h3>Цена за ночь</h3>
+            <div class="filter-chips" role="group" aria-label="Максимальная цена за ночь">
+              <button type="button" data-price="0" aria-pressed="true">Любая</button>
+              <button type="button" data-price="5000" aria-pressed="false">до 5k</button>
+              <button type="button" data-price="10000" aria-pressed="false">до 10k</button>
+              <button type="button" data-price="20000" aria-pressed="false">до 20k</button>
+            </div>
+            <div class="filter-range">
+              <label class="field-compact" for="min-price">Минимум <input id="min-price" type="number" min="0" placeholder="0"></label>
+              <label class="field-compact" for="max-price">Максимум <input id="max-price" type="number" min="0" placeholder="Любая"></label>
+            </div>
+          </section>
+          <section class="filter-group">
+            <h3>Рейтинг</h3>
+            <div class="filter-chips" role="group" aria-label="Минимальный рейтинг">
+              <button type="button" data-rating="0" aria-pressed="true">Любой</button>
+              <button type="button" data-rating="7" aria-pressed="false">7+</button>
+              <button type="button" data-rating="8" aria-pressed="false">8+</button>
+              <button type="button" data-rating="9" aria-pressed="false">9+</button>
+            </div>
+            <input id="min-rating" type="hidden" value="0">
+            <label class="field-compact" for="min-reviews">Количество отзывов <input id="min-reviews" type="number" min="0" value="0" placeholder="Любое"></label>
+          </section>
+          <section class="filter-group">
+            <h3>Размещение</h3>
+            <div class="filter-chips filter-segmented" role="group" aria-label="Тип размещения">
+              <button type="button" data-room-mode="all" aria-pressed="true">Все</button>
+              <button type="button" data-room-mode="private" aria-pressed="false">Личный номер</button>
+            </div>
+            <h4>Звёзды</h4>
+            <div class="filter-chips" role="group" aria-label="Минимальное число звёзд">
+              <button type="button" data-stars="0" aria-pressed="true">Все</button>
+              <button type="button" data-stars="3" aria-pressed="false">3★</button>
+              <button type="button" data-stars="4" aria-pressed="false">4★</button>
+              <button type="button" data-stars="5" aria-pressed="false">5★</button>
+            </div>
+            <input id="min-stars" type="hidden" value="0">
+          </section>
+          <section class="filter-group">
+            <h3>Питание</h3>
+            <div class="filter-chips filter-stack" role="group" aria-label="Питание">
+              <button type="button" data-meal="any" aria-pressed="true">Любое</button>
+              <button type="button" data-meal="room_only" aria-pressed="false">Без питания</button>
+              <button type="button" data-meal="breakfast" aria-pressed="false">Завтрак</button>
+              <button type="button" data-meal="half_board" aria-pressed="false">Полупансион</button>
+              <button type="button" data-meal="full_board" aria-pressed="false">Полный пансион</button>
+              <button type="button" data-meal="all_inclusive" aria-pressed="false">Всё включено</button>
+              <button type="button" data-meal="breakfast_dinner" aria-pressed="false">Завтрак + ужин</button>
+              <button type="button" data-meal="dinner" aria-pressed="false">Ужин</button>
+              <button type="button" data-meal="lunch_dinner" aria-pressed="false">Обед + ужин</button>
+            </div>
+            <input id="meal" type="hidden" value="any">
+          </section>
+          <section class="filter-group amenity-filter" id="amenity-filter" hidden>
+            <h3>Удобства</h3>
+            <div id="amenity-options" class="amenity-filter-options" role="group" aria-label="Удобства">
+              <button type="button" data-amenity="any" aria-pressed="true">Любые</button>
+            </div>
+            <input id="amenity" type="hidden" value="any">
+          </section>
+          <section class="filter-group">
+            <h3>Отмена</h3>
+            <div class="filter-chips filter-stack" role="group" aria-label="Условия отмены">
+              <button type="button" data-cancellation="any" aria-pressed="true">Любые условия</button>
+              <button type="button" data-cancellation="free" aria-pressed="false">Бесплатная отмена</button>
+            </div>
+            <input id="cancellation" type="hidden" value="any">
+          </section>
+          <section class="filter-group">
+            <h3>Расположение</h3>
+            <h4>До центра</h4>
+            <div class="filter-chips filter-stack" role="group" aria-label="Расстояние до центра">
+              <button type="button" data-distance="0" aria-pressed="true">Любое</button>
+              <button type="button" data-distance="1" aria-pressed="false">до 1 км</button>
+              <button type="button" data-distance="3" aria-pressed="false">до 3 км</button>
+              <button type="button" data-distance="5" aria-pressed="false">до 5 км</button>
+            </div>
+            <input id="max-center-distance" type="hidden" value="0">
+            <h4>До пляжа</h4>
+            <div class="filter-chips filter-stack" role="group" aria-label="Расстояние до пляжа">
+              <button type="button" data-beach-distance="0" aria-pressed="true">Любое</button>
+              <button type="button" data-beach-distance="1" aria-pressed="false">до 1 км</button>
+              <button type="button" data-beach-distance="3" aria-pressed="false">до 3 км</button>
+              <button type="button" data-beach-distance="5" aria-pressed="false">до 5 км</button>
+            </div>
+            <input id="max-beach-distance" type="hidden" value="0">
+            <h4>Линия пляжа</h4>
+            <div class="filter-chips filter-stack" role="group" aria-label="Линия пляжа">
+              <button type="button" data-beach-line="any" aria-pressed="true">Неважно</button>
+              <button type="button" data-beach-line="first" aria-pressed="false">1-я линия</button>
+              <button type="button" data-beach-line="second" aria-pressed="false">2-я линия</button>
+              <button type="button" data-beach-line="third" aria-pressed="false">3-я линия</button>
+            </div>
+            <input id="beach-line" type="hidden" value="any">
+          </section>
+          <input id="price-currency" type="hidden" value="RUB">
+          <input id="unknown-policy" type="hidden" value="exclude">
+        </aside>
+        <div class="results-content">
+          <div class="results-tools">
+            <div class="sort-controls" role="group" aria-label="Сортировка">
+              <span>Сортировка</span>
+              <button type="button" data-sort="recommended" aria-pressed="true">Лучший выбор</button>
+              <button type="button" data-sort="price_asc" aria-pressed="false">Дешевле</button>
+              <button type="button" data-sort="rating_desc" aria-pressed="false">Рейтинг</button>
+              <button type="button" data-sort="location" aria-pressed="false">Ближе</button>
+              <input id="sort" type="hidden" value="recommended">
+            </div>
+            <div class="result-view-bar">
+              <div class="segmented view-switch" role="group" aria-label="Представление результатов">
+                <button type="button" data-view="list" aria-pressed="true">Список</button>
+                <button type="button" data-view="map" aria-pressed="false">Карта</button>
+              </div>
+              <button id="mobile-map-open" class="mobile-map-open" type="button">Показать карту</button>
+            </div>
+          </div>
+          <div id="active-filters" class="active-filters" aria-label="Активные фильтры" hidden></div>
+          <div class="results-split">
+            <div id="cards" class="hotel-list"></div>
+        <aside id="map-panel" class="map-panel" aria-label="Карта отелей" hidden>
+          <div id="hotel-map" class="hotel-map"></div>
+          <div id="map-empty" class="map-empty" hidden>У отелей в этой выдаче нет подтверждённых координат.</div>
+          <button id="mobile-map-close" class="mobile-map-close" type="button">× Закрыть карту</button>
+        </aside>
+          </div>
+        </div>
+      </div>
+      <div class="more-row"><div id="load-more" class="load-more-sentinel" hidden aria-hidden="true"></div></div>
+    </section>
+  </main>
+  <footer>Цены и наличие могут измениться у поставщика.</footer>
+</body>
+</html>

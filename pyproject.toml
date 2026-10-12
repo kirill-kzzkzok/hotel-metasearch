@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aviasales-hot-tickets-collector"
+version = "0.1.0"
+description = "Aviasales Hot Tickets collector and Telethon bot"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright>=1.50,<2",
+    "Telethon>=1.42,<2",
+    "python-dotenv>=1,<2",
+    "tzdata>=2024.1",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "httpx>=0.27,<1",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9", "httpx>=0.27,<1"]
+
+[project.scripts]
+aviasales-collector = "aviasales_collector.cli:main"
+hot-tickets-bot = "aviasales_collector.telegram_bot:main"
+hotel-search = "aviasales_collector.hotel_cli:main"
+tripcom-login = "aviasales_collector.tripcom_login:main"
+
+[tool.setuptools.packages.find]
+include = ["aviasales_collector*"]
+
+[tool.setuptools.package-data]
+aviasales_collector = ["web_assets/*", "data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

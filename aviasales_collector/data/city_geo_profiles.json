@@ -1,0 +1,50 @@
+[
+  {
+    "city_slug": "dubai",
+    "country_slug": "united-arab-emirates",
+    "is_beach_destination": true,
+    "evidence": "Coastal destination with urban beach tourism; beach distance is relevant to hotel choice."
+  },
+  {
+    "city_slug": "bangkok",
+    "country_slug": "thailand",
+    "is_beach_destination": false,
+    "evidence": "Inland metropolitan destination; nearby resort beaches are separate destinations."
+  },
+  {
+    "city_slug": "barcelona",
+    "country_slug": "spain",
+    "is_beach_destination": true,
+    "evidence": "Coastal city with urban beaches that form part of the city stay scenario."
+  },
+  {
+    "city_slug": "moscow",
+    "country_slug": "russia",
+    "is_beach_destination": false,
+    "evidence": "Inland metropolitan destination; beach distance is not a city hotel filter."
+  },
+  {
+    "city_slug": "saint-petersburg",
+    "country_slug": "russia",
+    "is_beach_destination": false,
+    "evidence": "Gulf and lake shore features exist, but urban beach access is not the city-wide hotel-search scenario."
+  },
+  {
+    "city_slug": "tbilisi",
+    "country_slug": "georgia",
+    "is_beach_destination": false,
+    "evidence": "Inland city; Black Sea beaches are separate destinations."
+  },
+  {
+    "city_slug": "yerevan",
+    "country_slug": "armenia",
+    "is_beach_destination": false,
+    "evidence": "Inland city; lake-side recreation is not a sea-beach hotel-search scenario."
+  },
+  {
+    "city_slug": "phuket",
+    "country_slug": "thailand",
+    "is_beach_destination": true,
+    "evidence": "Island destination where beach access is central to hotel choice."
+  }
+]

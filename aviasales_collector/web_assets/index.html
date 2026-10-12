@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Билеты · мониторинг</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-mark" aria-hidden="true">✳</div>
+    <div class="brand-copy"><strong>Билеты</strong><span>Локальный мониторинг</span></div>
+    <details class="notifications" id="notifications">
+      <summary><span class="bell" aria-hidden="true"></span> Уведомления <b id="notification-count" hidden></b></summary>
+      <div class="notification-panel" id="notification-list"><p>Пока нет событий.</p></div>
+    </details>
+  </header>
+  <main>
+    <section class="intro">
+      <div><p class="eyebrow">Aviasales · мониторинг</p><h1>Горящие билеты</h1></div>
+      <div class="departure-actions"><button class="archive-open-button" id="archive-open-button" type="button">Архив</button></div>
+    </section>
+    <section class="dashboard-controls" aria-label="Фильтры результатов">
+      <div class="departure-bar">
+      <div class="origin-switch" role="tablist" aria-label="Город вылета">
+        <button class="origin-tab selected" type="button" role="tab" aria-selected="true" data-origin="ALL"><span>Все вылеты</span></button>
+        <button class="origin-tab" type="button" role="tab" aria-selected="false" data-origin="MOW"><span>Москва</span><b>MOW</b></button>
+        <button class="origin-tab" type="button" role="tab" aria-selected="false" data-origin="LED"><span>Санкт-Петербург</span><b>LED</b></button>
+      </div>
+      <button class="add-origin-button" id="add-origin-button" type="button">+ Добавить город</button>
+      </div>
+      <div class="filter-row">
+        <label class="search-box"><span class="search-icon" aria-hidden="true"></span><input id="destination-search" type="search" placeholder="Найти направление" autocomplete="off"></label>
+        <details class="current-destinations" id="current-destinations">
+          <summary>Текущие направления</summary>
+          <div class="destination-list" id="destination-list"><p>Загружаем направления…</p></div>
+        </details>
+        <label class="sort-control">Сортировка<select id="sort-order"><option value="default">Как в поиске</option><option value="price">Сначала дешевле</option><option value="date">Ближайший вылет</option><option value="days">Длительность</option></select></label>
+        <label class="active-switch"><input id="active-only" type="checkbox"><span class="switch-track"></span><span>Активные</span></label>
+        <span class="live-state"><i></i><span id="refresh-state">Обновлено</span></span>
+      </div>
+      <div class="deep-scan-row"><button class="deep-scan-button" id="deep-scan-button" type="button" hidden>Начать глубокий скан</button></div>
+    </section>
+    <section class="results-panel" aria-live="polite">
+      <header class="results-heading"><div><h2 id="results-title">Все вылеты</h2></div><span id="result-count" class="result-count"></span></header>
+      <div id="scan-list" class="scan-list"></div>
+      <nav id="scan-pager" class="pager" aria-label="Страницы проверок" hidden><button type="button" data-page="previous" aria-label="Предыдущая страница">‹</button><span></span><button type="button" data-page="next" aria-label="Следующая страница">›</button></nav>
+    </section>
+  </main>
+  <footer>Новые результаты подгружаются автоматически.</footer>
+  <dialog id="price-history-dialog" class="price-history-dialog" aria-labelledby="price-history-title"><button class="dialog-close" type="button" aria-label="Закрыть">×</button><div class="price-history-content"><h2 id="price-history-title">История цены</h2></div></dialog>
+  <dialog id="trip-compare-dialog" class="trip-compare-dialog" aria-labelledby="trip-compare-title"><div id="trip-compare-content" data-origin="" data-destination=""><button class="dialog-close" type="button" aria-label="Закрыть">×</button><h2 id="trip-compare-title">Сравнение цен</h2></div></dialog>
+  <dialog id="deep-history-dialog" class="list-dialog" aria-labelledby="deep-history-title">
+    <button class="dialog-close" type="button" aria-label="Закрыть">×</button>
+    <header class="list-dialog__header"><div><p class="eyebrow">Результаты глубокого скана</p><h2 id="deep-history-title">Глубокая проверка</h2></div></header>
+    <label class="deep-sort-control" for="deep-sort-order">Сортировка
+      <select id="deep-sort-order"><option value="price" selected>Сначала дешевле</option><option value="duration">Сначала короче поездка</option></select>
+    </label>
+    <div id="deep-detail-content"></div>
+  </dialog>
+  <dialog id="archive-dialog" class="list-dialog" aria-labelledby="archive-title">
+    <button class="dialog-close" type="button" aria-label="Закрыть">×</button>
+    <header class="list-dialog__header"><div><p class="eyebrow">Скрытые направления</p><h2 id="archive-title">Архив</h2></div></header>
+    <div id="archive-list" class="archive-list"><p class="empty">Загружаем архив…</p></div>
+  </dialog>
+  <dialog id="origin-dialog" class="origin-dialog" aria-labelledby="origin-dialog-title">
+    <button class="dialog-close" type="button" aria-label="Закрыть">×</button>
+    <form id="origin-form">
+      <h2 id="origin-dialog-title">Добавить город вылета</h2>
+      <label class="origin-city-field">Город<input id="origin-city-input" type="text" placeholder="Введите город" autocomplete="off" maxlength="80" required></label>
+      <input id="origin-code" type="hidden">
+      <div id="city-suggestions" class="city-suggestions" role="listbox" hidden></div>
+      <small id="city-selection-hint" class="city-selection-hint" hidden></small>
+      <fieldset class="origin-trip-field"><legend>Тип поездки</legend><label><input type="radio" name="origin-trip-type" value="OW" checked> В одну сторону</label><label><input type="radio" name="origin-trip-type" value="RT"> Туда-обратно</label></fieldset>
+      <div id="origin-duration-fields" class="origin-duration-fields" hidden><label>От, дней<input id="origin-duration-min" type="number" min="1" max="30" value="3"></label><label>До, дней<input id="origin-duration-max" type="number" min="1" max="30" value="10"></label></div>
+      <label class="origin-interval-field">Интервал проверки, минут<input id="origin-interval" type="number" min="30" max="1440" value="90" required></label>
+      <p id="origin-form-error" class="form-error" role="alert" hidden></p>
+      <button id="save-origin-button" class="origin-save-button" type="submit">Сохранить и начать мониторинг</button>
+    </form>
+  </dialog>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>
