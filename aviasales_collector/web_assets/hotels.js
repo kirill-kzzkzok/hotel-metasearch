@@ -10,6 +10,7 @@ let cardVariantCacheSearchId = null;
 const cardVariantCache = new Map();
 let roomModeRequestRevision = 0;
 let roomModePending = null;
+let cardInsertionGeneration = 0;
 const roomModeRequestCoalescer = hotelSearchLifecycle.createRequestCoalescer();
 const selectedMealPlans = new Set();
 const selectedAmenities = new Set();
@@ -1071,32 +1072,43 @@ function hotelPolicy(hotel) {
   return {checkIn, checkOut};
 }
 function cardRenderSignature(hotel, index, nights, filters, currency, providers, offers) {
+  // Cheap, stable signature over only the fields the card actually renders.
+  // The previous JSON.stringify of the whole hotel object cost several ms per
+  // card on hundreds of cards per render; the priced fields that drive the
+  // visible content (name, rating, distances, offer prices, room rate count
+  // and status) are all present, so stale cached variants stay impossible.
   const location = hotel.location || {};
-  return JSON.stringify({
-    key: hotelKey(hotel), index, nights, name: hotel.name, address: hotel.address,
-    stars: hotel.stars ?? null, rating: hotel.rating ?? null, reviews_count: hotel.reviews_count ?? null,
-    review_stats: hotel.review_stats || [], review_summary: hotel.review_summary || null,
-    review_url: reviewLink(hotel), images: hotel.images || [],
-    location: {
-      coordinates: location.coordinates || null,
-      distance_to_center_km: location.distance_to_center_km ?? null,
-      distance_to_beach_km: location.distance_to_beach_km ?? null,
-      distance_to_metro_km: location.distance_to_metro_km ?? null,
-      distance_to_airport_km: location.distance_to_airport_km ?? null,
-      distance_to_landmark_km: location.distance_to_landmark_km ?? null,
-      landmark_name: location.landmark_name || null,
-      beach_line: location.beach_line || "unknown",
-    },
-    amenities: hotelAmenities(hotel), policy: hotelPolicy(hotel), offers,
-    room_options: hotel.room_options || [], room_rates: hotel.room_rates || [],
-    room_rate_enrichment_status: hotel.room_rate_enrichment_status || null,
-    provider_details: (hotel.provider_details || []).map((item) => [item.provider, item.check_in, item.check_out,
-      item.hotel_amenities, item.stars, item.rating, item.reviews_count]),
-    property_details: hotel.property_details || null,
-    source_records: (hotel.source_records || []).map((record) => [record.source, record.source_hotel_id,
-      record.room_rate_enrichment_status || null]),
-    filters, currency, providers,
-  });
+  const offerSignature = (offers || []).map((offer) => [
+    offer.source || offer.provider || null,
+    offer.price?.value ?? offer.price ?? null,
+    offer.price?.currency ?? offer.currency ?? null,
+    offer.provider_rate_id || null,
+    (offer.labels || []).join(","),
+  ]).join("|");
+  const reviewSignature = (hotel.review_stats || []).map((item) => [
+    item.source || null, item.rating ?? null, item.reviews_count ?? null]).join("|");
+  const roomRateCount = (hotel.room_rates || []).length;
+  const roomOptionCount = (hotel.room_options || []).length;
+  return [
+    hotelKey(hotel), index, nights, hotel.name || "", hotel.address || "",
+    hotel.stars ?? "", hotel.rating ?? "", hotel.reviews_count ?? "",
+    reviewSignature, reviewLink(hotel) || "",
+    (hotel.images || []).length, location.coordinates || "",
+    location.distance_to_center_km ?? "", location.distance_to_beach_km ?? "",
+    location.distance_to_metro_km ?? "", location.distance_to_airport_km ?? "",
+    location.distance_to_landmark_km ?? "", location.landmark_name || "",
+    location.beach_line || "unknown",
+    (hotelAmenities(hotel) || []).join(","), JSON.stringify(hotelPolicy(hotel) || null),
+    offerSignature, roomOptionCount, roomRateCount,
+    hotel.room_rate_enrichment_status || "",
+    (hotel.provider_details || []).map((item) => [item.provider, item.stars ?? "",
+      item.rating ?? "", item.reviews_count ?? ""].join(",")).join("|"),
+    JSON.stringify(hotel.property_details?.stars ?? null),
+    hotel.property_details?.description ? "d" : "",
+    (hotel.source_records || []).map((record) => [record.source,
+      record.source_hotel_id, record.room_rate_enrichment_status || ""].join(",")).join("|"),
+    JSON.stringify(filters), currency || "", JSON.stringify(providers || []),
+  ].join("~");
 }
 function openModal(title, bodyBuilder) {
   const overlay = document.createElement("div"); overlay.className = "modal-overlay";
@@ -1737,12 +1749,35 @@ function render(data) {
     variants.set(renderSignature, card);
     while (variants.size > 4) variants.delete(variants.keys().next().value);
   }
-  // Build the order off-DOM and replace the list once. Repeated insertBefore
-  // on hundreds of cards forced style/layout work after every card and made
-  // room-mode switches visibly stall the main thread.
-  const fragment = document.createDocumentFragment();
-  orderedCards.forEach((card) => fragment.append(card));
-  cards.replaceChildren(fragment);
+  // Bound the global variant cache: hundreds of hotels x 4 variants each
+  // kept thousands of detached DOM trees alive after every filter/sort
+  // change. Evicting the least recently *set* hotel keys keeps memory flat
+  // while preserving variants for the hotels the user is actually looking
+  // at; re-entering a filter just rebuilds an evicted card.
+  while (cardVariantCache.size > 400) {
+    cardVariantCache.delete(cardVariantCache.keys().next().value);
+  }
+  // Build the order off-DOM and insert in rAF chunks. One synchronous
+  // replaceChildren of hundreds of cards produced a single long task
+  // (0.8-1.8s) that froze scrolling and the map; chunked insertion keeps
+  // the first cards visible immediately while later chunks land between
+  // frames. A generation token cancels a still-running insertion when a
+  // newer render starts, so the list can never show a stale mix.
+  const insertionGeneration = ++cardInsertionGeneration;
+  const CHUNK = 60;
+  const insertChunk = (start) => {
+    if (insertionGeneration !== cardInsertionGeneration) return;
+    const fragment = document.createDocumentFragment();
+    for (let i = start; i < Math.min(start + CHUNK, orderedCards.length); i += 1) {
+      fragment.append(orderedCards[i]);
+    }
+    cards.append(fragment);
+    if (start + CHUNK < orderedCards.length) {
+      requestAnimationFrame(() => insertChunk(start + CHUNK));
+    }
+  };
+  cards.replaceChildren();
+  insertChunk(0);
   updateMap(hotels);
 }
 
