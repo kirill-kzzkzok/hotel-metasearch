@@ -86,6 +86,18 @@ def persist_tripcom_room_rates(path: str | Path, search_id: str,
         fetched_at = observed_at or max((str(rate.get("observed_at") or utc_now()) for rate in rates),
                                         default=utc_now())
         fetch_status = status or str(inventory.get("status") or ("ok" if rates else "no_rates"))
+        # A queued/running accounting row may already exist for this task
+        # (written before the browser pool started). Replace it with the
+        # terminal outcome instead of accumulating a second row.
+        connection.execute(
+            """DELETE FROM hotel_room_rate_fetch
+               WHERE search_id=? AND source='trip_com' AND source_hotel_id=?
+                 AND check_in=? AND check_out=? AND adults=? AND children_count=?
+                 AND attempt=? AND retry_count=? AND status IN ('queued','running')""",
+            (search_id, source_hotel_id, inventory["check_in"], inventory["check_out"],
+             inventory["adults"], inventory.get("children_count", 0),
+             max(0, int(attempt)), max(0, int(retry_count))),
+        )
         detail_rating = _normalize_rating_fields(
             property_details.get("rating_original", property_details.get("rating"))
             if isinstance(property_details, dict) else None,

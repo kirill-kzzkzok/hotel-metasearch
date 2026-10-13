@@ -11,7 +11,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from .models import HotelSearchOperationError
+from .models import HotelSearchOperationError, utc_now
 from .persistence import (_sanitize_enrichment_error_message,
                           persist_tripcom_room_rates)
 from .read_model import _read_search
@@ -20,6 +20,34 @@ from .runtime import (_ACTIVE_SEARCH_TIMELINE_ID, _profiled_sqlite_connect, log,
 from .sources.tripcom import (DEFAULT_TRIP_PROFILE, TRIP_EXECUTOR,
                               TRIP_PROFILE_LOCK, shutdown_tripcom_browser)
 from .sources.tripcom_rates import collect_tripcom_room_rates
+
+
+def _persist_rate_task_lifecycle(database_path: str | Path, search_id: str,
+                                 tasks: list[dict[str, Any]], query: dict[str, Any],
+                                 status: str) -> None:
+    """Persist one accounting row per scheduled rate task before browser work.
+
+    Rows used to appear only at terminal, so an interrupted pool (client
+    disconnect, server restart, context crash) silently lost every unfinished
+    task and no endpoint could answer "expected vs completed". Writing
+    queued/running rows up front keeps the accounting observable without
+    changing what a terminal row means.
+    """
+    if not tasks:
+        return
+    with closing(_profiled_sqlite_connect(str(database_path), timeout=10)) as connection:
+        connection.executemany(
+            """INSERT INTO hotel_room_rate_fetch
+            (search_id,source,source_hotel_id,check_in,check_out,adults,children_count,status,
+             http_status,latency_ms,rates_seen,observed_at,operation,attempt,retry_count)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            [(search_id, "trip_com", str(task["source_hotel_id"]), query["check_in"],
+              query["check_out"], query["adults"], query.get("children_count", 0), status,
+              None, None, 0, utc_now(), task.get("operation", "tripcom_detail_rate_inventory"),
+              int(task.get("attempt", 1)), int(task.get("retry_count", 0)))
+             for task in tasks],
+        )
+        connection.commit()
 
 
 def _tripcom_source_city_id(database_path: str | Path, search_id: str,
@@ -153,6 +181,12 @@ async def enrich_tripcom_room_rates(
         }
     log_search_timeline(search_id, "rate_queue_prepared", scheduled=len(tasks),
                         reused=len(reused_outcomes), concurrency=payload.get("concurrency", 5))
+    # Accounting rows appear before browser work so an interrupted pool is
+    # observable: expected/created are countable even if no task reaches
+    # terminal. The "queued" status is non-terminal and excluded from reuse.
+    await asyncio.to_thread(
+        _persist_rate_task_lifecycle, database_path, search_id, tasks, query, "queued",
+    )
     profile_setting = os.getenv("TRIP_COM_BROWSER_DATA_DIR")
     profile = Path(profile_setting).expanduser().resolve() if profile_setting else DEFAULT_TRIP_PROFILE
     if not TRIP_PROFILE_LOCK.acquire(blocking=False):
