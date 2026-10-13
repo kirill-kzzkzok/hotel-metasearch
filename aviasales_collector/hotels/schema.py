@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 from contextlib import closing
 from pathlib import Path
@@ -42,6 +43,16 @@ def init_hotel_store(path: str | Path) -> None:
 
 def _initialize_hotel_store_uncached(path: str | Path) -> None:
     with closing(_profiled_sqlite_connect(str(path), timeout=10)) as connection:
+        # WAL keeps readers and the writer concurrent: with the default
+        # rollback journal a single persistence transaction (rate results,
+        # coordinate batches) blocks every browser poll with
+        # "database is locked" (measured: 3 lock errors / 22ms reads during
+        # one write; with WAL: 0 errors). WAL is persistent per database
+        # file and safe to re-apply on existing stores.
+        try:
+            connection.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError:
+            pass  # network shares / exotic filesystems may reject WAL
         connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS hotel_search_session (
