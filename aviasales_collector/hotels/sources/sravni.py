@@ -17,7 +17,7 @@ from ..normalization import normalize_hotel
 from ..runtime import EXECUTOR, MAX_RESPONSE_BYTES, _profiled_urlopen, log
 from .base import HotelSource
 
-SRAVNI_BASE = "https://hotels.travel.ru/api/public/hotels"
+SRAVNI_BASE = "https://hotels.travel.ru/api/v1"
 
 CITY_AUTOCOMPLETE_URL = "https://autocomplete.travelpayouts.com/places2"
 
@@ -144,6 +144,14 @@ class SravniOtelSource:
             return SourceResult(self.source, "invalid_response", error_class="invalid_response",
                                 http_status=http_status, latency_ms=latency_ms,
                                 reason="Search response had no hotels list")
+        # The live /api/v1 contract renamed pagination fields to snake_case
+        # (total_hotels, next_page_token). The downstream cache, persistence and
+        # read-model still read the historical camelCase keys, so normalize once
+        # here instead of touching every consumer.
+        if "totalHotels" not in raw and isinstance(raw.get("total_hotels"), int):
+            raw["totalHotels"] = raw["total_hotels"]
+        if "nextPageToken" not in raw and raw.get("next_page_token") is not None:
+            raw["nextPageToken"] = str(raw["next_page_token"])
         parse_started = time.perf_counter()
         hotels = tuple(item for raw_hotel in raw["hotels"]
                        if isinstance(raw_hotel, dict)
