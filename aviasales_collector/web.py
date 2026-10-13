@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 from urllib.request import Request as URLRequest, urlopen
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 
 from .database import MonitorSettings, SQLiteStore
@@ -404,6 +405,11 @@ def create_app(
 
     app = FastAPI(title="Aviasales ticket monitor", docs_url=None, redoc_url=None,
                   openapi_url=None, lifespan=lifespan)
+    # A full search GET can reach ~7 MB of JSON (150 cards with source
+    # records and rates); gzip cuts it to ~0.5 MB measured on a live
+    # snapshot (93% reduction). Only applied when the client sends
+    # Accept-Encoding: gzip, which fetch() always does.
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     init_hotel_store(database_path)
     app.include_router(build_router(database_path))
     trusted_ids = tuple(sorted(allowed_user_ids))
