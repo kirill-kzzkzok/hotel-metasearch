@@ -1403,10 +1403,11 @@ function render(data) {
   byId("results-title").textContent = data.query.city_name || "Отели";
   const resultCount = `${resultProgress.discovered} найдено · ${resultProgress.ready} готово`;
   const preparingCount = resultProgress.pending ? ` · уточняем детали у ${resultProgress.pending}` : "";
+  const unusableCount = resultProgress.unusable ? ` · ${resultProgress.unusable} без цены` : "";
   const pendingMode = roomModePending?.searchId === data.search_id ? roomModePending.mode : null;
   const modeUpdate = pendingMode ? ` · применяем фильтр «${pendingMode === "private" ? "Личный номер" : "Все варианты"}»` : "";
   const resultsMeta = byId("results-meta");
-  resultsMeta.dataset.baseText = `${dateLabel(data.query.check_in)} – ${dateLabel(data.query.check_out)} · ${data.query.adults} ${plural(data.query.adults, "взрослый", "взрослых", "взрослых")} · ${resultCount}${preparingCount}`;
+  resultsMeta.dataset.baseText = `${dateLabel(data.query.check_in)} – ${dateLabel(data.query.check_out)} · ${data.query.adults} ${plural(data.query.adults, "взрослый", "взрослых", "взрослых")} · ${resultCount}${preparingCount}${unusableCount}`;
   resultsMeta.textContent = resultsMeta.dataset.baseText + modeUpdate;
   if (pendingMode) resultsMeta.setAttribute("aria-busy", "true");
   else resultsMeta.removeAttribute("aria-busy");

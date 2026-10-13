@@ -26,7 +26,21 @@ test("result counts distinguish discovered, ready, and pending hotels", () => {
   const counts = lifecycle.resultProgressCounts(search,
     (currentSearch, hotel) => currentSearch.query.check_in && hotel.ready,
     (currentSearch, hotel) => currentSearch.search_id === "search-1" && hotel.pending);
-  assert.deepEqual(counts, {discovered: 121, ready: 1, pending: 121});
+  assert.deepEqual(counts, {discovered: 121, ready: 1, pending: 121, unusable: 0});
+});
+
+test("result counts surface hotels that never pass the required-data gate", () => {
+  const search = {search_id: "search-2", query: {check_in: "2026-10-20", check_out: "2026-10-25"},
+    hotels: [
+      {id: 1, ready: true},
+      {id: 2, pending: true},
+      {id: 3}, // no valid offer/name: neither ready nor pending
+      {id: 4}, // no valid offer/name
+    ]};
+  const counts = lifecycle.resultProgressCounts(search,
+    (currentSearch, hotel) => Boolean(hotel.ready),
+    (currentSearch, hotel) => Boolean(hotel.pending));
+  assert.deepEqual(counts, {discovered: 4, ready: 1, pending: 1, unusable: 2});
 });
 
 test("identical room-mode requests are coalesced and released after completion", async () => {

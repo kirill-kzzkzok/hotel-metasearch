@@ -17,10 +17,17 @@
 
   function resultProgressCounts(search, isReady, isPending) {
     const candidates = Array.isArray(search?.hotels) ? search.hotels : [];
+    const ready = candidates.filter((hotel) => isReady(search, hotel)).length;
+    const pending = candidates.filter((hotel) => isPending(search, hotel)).length;
+    // discovered > ready + pending happens when a hotel never passes the
+    // required-data gate (no valid offer/price, or a name-less record).
+    // Surface that remainder as unusable instead of hiding it in the sum.
+    const unusable = Math.max(0, candidates.length - ready - pending);
     return {
       discovered: candidates.length,
-      ready: candidates.filter((hotel) => isReady(search, hotel)).length,
-      pending: candidates.filter((hotel) => isPending(search, hotel)).length,
+      ready,
+      pending,
+      unusable,
     };
   }
 
