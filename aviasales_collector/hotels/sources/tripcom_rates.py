@@ -70,6 +70,15 @@ def normalize_tripcom_rate_inventory(payload: Any, *, source_hotel_id: str,
         return {"source_hotel_id": str(source_hotel_id), **booking_context, "rates": [], "room_groups": [],
                 "status": "invalid_response"}
     if "saleRoomMap" not in data:
+        # Trip.com's anti-bot marks a request as spider traffic with
+        # data.htlSpiderActionErrorCode (observed: 4030) while still
+        # returning HTTP 200. Without this branch a protection response
+        # would be classified as a benign absent inventory and terminal
+        # "success-family" status, hiding the real cause from the user.
+        spider_code = data.get("htlSpiderActionErrorCode")
+        if spider_code is not None:
+            return {"source_hotel_id": str(source_hotel_id), **booking_context, "rates": [], "room_groups": [],
+                    "status": "blocked", "spider_action_error_code": spider_code}
         return {"source_hotel_id": str(source_hotel_id), **booking_context, "rates": [], "room_groups": [],
                 "status": "rate_inventory_absent"}
     rate_map = data.get("saleRoomMap")

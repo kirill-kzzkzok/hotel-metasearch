@@ -66,6 +66,49 @@ def test_rate_payload_without_expected_data_shape_stays_invalid():
     assert error_message
 
 
+def test_spider_action_error_code_is_blocked_not_absent_inventory():
+    """HTTP 200 + data.htlSpiderActionErrorCode is Trip.com's anti-bot marker.
+
+    Observed live: {"data": {"htlSpiderActionErrorCode": 4030}, "ResponseStatus": ...}
+    Previously normalized as rate_inventory_absent (a success-family terminal
+    status), hiding a protection response behind a benign outcome.
+    """
+    status, inventory, error_type, error_message = _classify_tripcom_rate_response(
+        200,
+        {"data": {"htlSpiderActionErrorCode": 4030},
+         "ResponseStatus": {"Ack": "Success", "Errors": []}},
+        body_wait_error=None,
+        source_hotel_id="128915998",
+        check_in="2026-11-14",
+        check_out="2026-11-17",
+        adults=2,
+        children_count=0,
+    )
+
+    assert status == "blocked"
+    assert inventory is not None
+    assert inventory["status"] == "blocked"
+    assert inventory["spider_action_error_code"] == 4030
+    assert inventory["rates"] == []
+
+
+def test_absent_inventory_without_spider_marker_stays_rate_inventory_absent():
+    status, inventory, error_type, error_message = _classify_tripcom_rate_response(
+        200,
+        {"data": {}, "ResponseStatus": {"Ack": "Success", "Errors": []}},
+        body_wait_error=None,
+        source_hotel_id="123",
+        check_in="2026-10-20",
+        check_out="2026-10-25",
+        adults=2,
+        children_count=0,
+    )
+
+    assert status == "rate_inventory_absent"
+    assert inventory["status"] == "rate_inventory_absent"
+    assert error_type is None
+
+
 def test_http_200_with_stalled_rate_body_is_a_terminal_body_timeout():
     status, inventory, error_type, error_message = _classify_tripcom_rate_response(
         200,
