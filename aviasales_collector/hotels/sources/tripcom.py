@@ -368,7 +368,7 @@ def _tripcom_collect_visible_cards(page: Any, cards: Any, result_panel: Any,
                   const list = document.querySelector('.hotel-list');
                   if (!list) return null;
                   const view = list.ownerDocument.defaultView;
-                  const rects = Array.from(list.querySelectorAll('.hotel-card')).map(card => {
+                  const rects = Array.from(list.querySelectorAll('.hotel-card, .list-item')).map(card => {
                     const rect = card.getBoundingClientRect();
                     return {x: rect.left, y: rect.top, right: rect.right, bottom: rect.bottom};
                   });
@@ -987,7 +987,7 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                 response = page.goto(result_url, wait_until="domcontentloaded", timeout=45000)
                 timings["results_navigation_ms"] = round((time.perf_counter() - stage_started) * 1000, 1)
                 try:
-                    page.locator(".hotel-card").first.wait_for(state="visible", timeout=7000)
+                    page.locator(".hotel-card, .hotel-list .list-item").first.wait_for(state="visible", timeout=7000)
                 except Exception:
                     pass
                 # 2026-10-14: Trip.com's listpage sometimes renders only the filter
@@ -995,7 +995,7 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                 # until the page's own search form is submitted natively. Click the
                 # page's own search button once when the shell stays empty; this is
                 # a normal user gesture, not an anti-bot bypass.
-                if page.locator(".hotel-card").count() == 0:
+                if page.locator(".hotel-card, .hotel-list .list-item").count() == 0:
                     log.info("[TRIP_SEARCH] stage=results_shell_nudge city=%s",
                              query.get("city_name"))
                     try:
@@ -1003,7 +1003,7 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                             '.btn-search, button:has-text("Найти"), button:has-text("Поиск")'
                         ).first
                         nudge.click(timeout=3000)
-                        page.locator(".hotel-card").first.wait_for(state="visible", timeout=15000)
+                        page.locator(".hotel-card, .hotel-list .list-item").first.wait_for(state="visible", timeout=15000)
                     except Exception:
                         pass
                 page.wait_for_timeout(1000)
@@ -1043,7 +1043,11 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                                         latency_ms=int((time.perf_counter() - started) * 1000),
                                         error_class="search_context_mismatch",
                                         reason="Trip.com page did not confirm the requested dates and occupancy")
-                cards = page.locator(".hotel-card")
+                # 2026-10-14: Trip.com redesigned the results page. Cards are now
+                # .hotel-list > .list-item with the hotel name in a.hotelName
+                # (hotelId= in its href); the legacy .hotel-card class no longer
+                # exists. Accept BOTH layouts so an A/B rollback still works.
+                cards = page.locator(".hotel-card, .hotel-list .list-item")
                 if cards.count() == 0:
                     if "Вход/регистрация" in body:
                         return SourceResult("trip_com", "login_required", http_status=http_status,
