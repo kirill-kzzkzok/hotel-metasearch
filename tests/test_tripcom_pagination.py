@@ -119,7 +119,7 @@ class _Page:
         }
 
     def evaluate(self, _script):
-        if "const rects = Array.from(list.querySelectorAll('.hotel-card'))" in _script:
+        if "const rects = Array.from(list.querySelectorAll('.hotel-card, .list-item'))" in _script:
             self.scroll_target_selector = ".hotel-list"
             return {"x": 700, "y": 400}
         # Match the collector's ~214 ms scroll-and-settle interval.
@@ -271,7 +271,7 @@ def test_single_no_progress_wheel_retries_while_not_at_bottom(monkeypatch):
                                "window_top": 100, "window_height": 5000})
 
         def evaluate(self, script):
-            if "const rects = Array.from(list.querySelectorAll('.hotel-card'))" in script:
+            if "const rects = Array.from(list.querySelectorAll('.hotel-card, .list-item'))" in script:
                 self.scroll_target_selector = ".hotel-list"
                 return {"x": 700, "y": 400}
             self.clock.now += 0.214
