@@ -777,12 +777,11 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                 timings["browser_launch_or_reuse_ms"] = round((time.perf_counter() - stage_started) * 1000, 1)
                 # 2026-10-14: Trip.com deployed a service worker (sw.js?v=20261014)
                 # whose cached state renders an empty results shell (filters, no
-                # cards) on controlled pages - the same site a fresh visitor sees
-                # correctly. Landing on the domain first, then clearing the site's
-                # own storage (cookies, local/session storage, worker
-                # registrations), is the standard "clear site data" recovery a user
-                # performs. Login cookies are lost only if the profile had one; the
-                # anonymous discovery profile has none.
+                # cards) on controlled pages. Unregistering the worker and
+                # clearing web storage on a domain landing is the standard
+                # "clear site data" recovery a user performs - but cookies are
+                # deliberately preserved: they carry the authenticated Trip.com
+                # session (cticket/login_uid) the user signs in manually.
                 try:
                     page.goto("https://ru.trip.com/", wait_until="domcontentloaded", timeout=30000)
                     page.evaluate(
@@ -792,7 +791,6 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                         " await Promise.all(regs.map(r => r.unregister())); } catch (e) {}"
                         "}"
                     )
-                    context.clear_cookies()
                     log.info("[TRIP_SEARCH] stage=site_storage_reset city=%s",
                              query.get("city_name"))
                 except Exception:
