@@ -274,12 +274,10 @@ def _read_search(
         query = _safe_json_loads(session["query_json"], {})
         if not isinstance(query, dict):
             query = {}
-        beach_profile = None
-        if not matching_only:
-            beach_profile = _read_city_geo_profile(
-                connection, query.get("city_name") or "", query.get("country"),
-                query.get("city_slug"), query.get("country_slug"),
-            )
+        beach_profile = _read_city_geo_profile(
+            connection, query.get("city_name") or "", query.get("country"),
+            query.get("city_slug"), query.get("country_slug"),
+        )
         hotel_sql = "SELECT * FROM hotel_observation WHERE search_id=?"
         hotel_params: list[Any] = [search_id]
         if source_hotel_ids is not None and source_identity_keys is not None:
@@ -318,6 +316,10 @@ def _read_search(
             # not fully hydrated cards. Building the public read model here
             # reread Geo caches, offers, rates, and provider details on every
             # cursor page, even though matching consumes only source evidence.
+            # The city beach profile is still applied: a merged canonical card
+            # (trip_com + sravniotel) must carry the same beach applicability
+            # as its raw records, otherwise the card shows the beach line while
+            # raw cards hide it (2026-10-15 Paris smoke, 12 canonical cards).
             stage_started = time.perf_counter()
             source_keys = [(str(row["source"]), str(row["source_hotel_id"])) for row in hotels]
             identities: dict[tuple[str, str], str | None] = {}
@@ -366,6 +368,10 @@ def _read_search(
                     "coordinates": matching_coordinates,
                     "images": images,
                     "nearby_places": _safe_json_list(row["nearby_places_json"]),
+                    "cached_beach_relevant": (
+                        beach_profile.is_beach_destination
+                        if beach_profile is not None else None
+                    ),
                     "_match_evidence": {
                         "address": row["address"],
                         "stars": stars,

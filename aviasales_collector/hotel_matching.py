@@ -429,6 +429,7 @@ def merge_auto_matched_hotels(hotels: list[dict[str, Any]]) -> list[dict[str, An
                 "coordinate_source", "coordinate_method", "coordinate_confidence",
                 "coordinate_status", "coordinate_conflict", "coordinate_reason", "coordinate_attempts",
                 "cached_beach_distance_meters", "cached_beach_name", "cached_beach_source",
+                "cached_beach_relevant", "cached_beach_status",
                 "provider_details", "property_details", "room_options", "room_rates",
                 "room_rate_enrichment_status", "review_url",
             )})

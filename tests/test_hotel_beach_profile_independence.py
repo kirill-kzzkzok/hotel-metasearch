@@ -91,7 +91,13 @@ def test_water_coastline_river_and_canal_do_not_create_beach_or_city_flag(tmp_pa
     assert "osm_id" not in result
     with sqlite3.connect(db) as connection:
         profile = _read_city_geo_profile(connection, "Cancun", "Mexico", "cancun", "mexico")
-    assert profile is None
+    # 2026-10-15: cancun is now a curated beach destination (§6 matrix), so a
+    # profile legitimately exists from init. The invariant this test guards is
+    # that water/coastline/river/canal features must not CREATE or FLIP the
+    # beach flag: the curated True value must survive unchanged, and no
+    # detected_beach profile source may appear.
+    assert profile is not None and profile.is_beach_destination is True
+    assert profile.source == "curated_city_destination_profile"
 
 
 def test_concurrent_hotels_share_one_overpass_tile_request(tmp_path, monkeypatch):

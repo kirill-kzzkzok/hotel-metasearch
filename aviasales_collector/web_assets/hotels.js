@@ -473,7 +473,10 @@ function mapPopup(hotel, key) {
   }
   const beachDistanceValue = hotel.location?.distance_to_beach_km;
   const beachDistance = Number(beachDistanceValue);
-  const beachApplicable = hotel.location?.beach_relevant !== false
+  // 2026-10-15: applicability must be explicit (beach_relevant === true).
+  // beach_relevant=null (city not in a geo profile) used to pass the !==false
+  // gate and render "до пляжа" for inland cities (Paris live smoke).
+  const beachApplicable = hotel.location?.beach_relevant === true
     && hotel.location?.beach_status !== "not_applicable";
   if (beachApplicable && hasDistance(beachDistanceValue)) {
     addText(facts, "map-popup-distance", `${formatDistance(beachDistance)} до пляжа`);
@@ -1565,7 +1568,10 @@ function render(data) {
     addText(context, "location-line", `📍 ${hasDistance(centerRaw) ? formatDistance(centerDistance) : "—"} до центра`);
     const beachRaw = hotel.location?.distance_to_beach_km;
     const beachDistance = Number(beachRaw);
-    const beachApplicable = hotel.location?.beach_relevant !== false
+    // 2026-10-15: applicability must be explicit (beach_relevant === true).
+    // beach_relevant=null (city not in a geo profile) used to pass the !==false
+    // gate and rendered "до пляжа" for inland cities (Paris live smoke).
+    const beachApplicable = hotel.location?.beach_relevant === true
       && hotel.location?.beach_status !== "not_applicable";
     if (beachApplicable) {
       addText(context, "beach-line", `🏖 ${hasDistance(beachRaw) ? formatDistance(beachDistance) : "—"} до пляжа`);

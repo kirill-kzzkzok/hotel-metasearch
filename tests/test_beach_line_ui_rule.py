@@ -22,7 +22,9 @@ def test_hotel_card_beach_line_is_conditional():
         r'addText\(context, "beach-line".*?\);',
         SOURCE, re.S).group(0)
     assert "beachApplicable" in card_block, "card must gate the beach line on applicability"
-    assert 'hotel.location?.beach_relevant !== false' in card_block
+    # 2026-10-15: applicability must be EXPLICIT. beach_relevant=null (city not
+    # in a geo profile) rendered "до пляжа" for inland cities (Paris live smoke).
+    assert 'hotel.location?.beach_relevant === true' in card_block
     assert 'hotel.location?.beach_status !== "not_applicable"' in card_block
     # The render itself must sit inside the applicability guard, not before it.
     guard = re.search(r'const beachApplicable.*?if \(beachApplicable\) \{', card_block, re.S)

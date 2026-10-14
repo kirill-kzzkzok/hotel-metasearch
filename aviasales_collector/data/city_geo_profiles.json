@@ -46,5 +46,59 @@
     "country_slug": "thailand",
     "is_beach_destination": true,
     "evidence": "Island destination where beach access is central to hotel choice."
+  },
+  {
+    "city_slug": "paris",
+    "country_slug": "france",
+    "is_beach_destination": false,
+    "evidence": "Inland metropolitan destination; the Atlantic coast is a separate trip, not a city hotel filter. Added after the 2026-10-15 live smoke: unprofiled cities rendered the card beach line because beach_relevant=null passes the JS !==false gate."
+  },
+  {
+    "city_slug": "london",
+    "country_slug": "united-kingdom",
+    "is_beach_destination": false,
+    "evidence": "Inland metropolitan destination; seaside towns are separate destinations."
+  },
+  {
+    "city_slug": "tokyo",
+    "country_slug": "japan",
+    "is_beach_destination": false,
+    "evidence": "Inland metropolitan destination; Kamakura and other beaches are day-trip destinations outside the city."
+  },
+  {
+    "city_slug": "rio-de-janeiro",
+    "country_slug": "brazil",
+    "is_beach_destination": true,
+    "evidence": "Coastal city where urban beaches (Copacabana, Ipanema) are part of the hotel stay scenario."
+  },
+  {
+    "city_slug": "cancun",
+    "country_slug": "mexico",
+    "is_beach_destination": true,
+    "evidence": "Beach resort destination where beach access is central to hotel choice."
+  },
+  {
+    "city_slug": "antalya",
+    "country_slug": "turkey",
+    "is_beach_destination": true,
+    "evidence": "Coastal resort city where beach access is central to hotel choice."
+  },
+  {
+    "city_slug": "brugge",
+    "country_slug": "belgium",
+    "is_beach_destination": false,
+    "evidence": "Inland medieval city; the Belgian coast (Zeebrugge, Blankenberge) is a separate short trip."
+  },
+  {
+    "city_slug": "suzdal",
+    "country_slug": "russia",
+    "is_beach_destination": false,
+    "evidence": "Inland heritage town on the Kamenka river; no sea-beach hotel-search scenario."
+  },
+  {
+    "city_slug": "cusco",
+    "country_slug": "peru",
+    "is_beach_destination": false,
+    "evidence": "High-altitude Andean city (~3400 m); coastal beaches are a separate region."
   }
 ]
