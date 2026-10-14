@@ -775,6 +775,28 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                 page, context, reused_browser = _tripcom_new_page_with_recovery(
                     context, reused_browser, profile, sync_playwright)
                 timings["browser_launch_or_reuse_ms"] = round((time.perf_counter() - stage_started) * 1000, 1)
+                # 2026-10-14: Trip.com deployed a service worker (sw.js?v=20261014)
+                # whose cached state renders an empty results shell (filters, no
+                # cards) on controlled pages - the same site a fresh visitor sees
+                # correctly. Landing on the domain first, then clearing the site's
+                # own storage (cookies, local/session storage, worker
+                # registrations), is the standard "clear site data" recovery a user
+                # performs. Login cookies are lost only if the profile had one; the
+                # anonymous discovery profile has none.
+                try:
+                    page.goto("https://ru.trip.com/", wait_until="domcontentloaded", timeout=30000)
+                    page.evaluate(
+                        "async () => {"
+                        " try { localStorage.clear(); sessionStorage.clear(); } catch (e) {}"
+                        " try { const regs = await navigator.serviceWorker.getRegistrations();"
+                        " await Promise.all(regs.map(r => r.unregister())); } catch (e) {}"
+                        "}"
+                    )
+                    context.clear_cookies()
+                    log.info("[TRIP_SEARCH] stage=site_storage_reset city=%s",
+                             query.get("city_name"))
+                except Exception:
+                    pass
                 page.on("response", lambda response: response_statuses.append(
                     (response.status, urlparse(response.url).path)
                 ) if response.status in (401, 403, 429, 430) else None)
@@ -970,6 +992,22 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                     page.locator(".hotel-card").first.wait_for(state="visible", timeout=7000)
                 except Exception:
                     pass
+                # 2026-10-14: Trip.com's listpage sometimes renders only the filter
+                # shell on a direct URL load - no hotel cards and no inventory XHR -
+                # until the page's own search form is submitted natively. Click the
+                # page's own search button once when the shell stays empty; this is
+                # a normal user gesture, not an anti-bot bypass.
+                if page.locator(".hotel-card").count() == 0:
+                    log.info("[TRIP_SEARCH] stage=results_shell_nudge city=%s",
+                             query.get("city_name"))
+                    try:
+                        nudge = page.locator(
+                            '.btn-search, button:has-text("Найти"), button:has-text("Поиск")'
+                        ).first
+                        nudge.click(timeout=3000)
+                        page.locator(".hotel-card").first.wait_for(state="visible", timeout=15000)
+                    except Exception:
+                        pass
                 page.wait_for_timeout(1000)
                 http_status = response.status if response else http_status
                 if http_status is not None and http_status >= 500:
