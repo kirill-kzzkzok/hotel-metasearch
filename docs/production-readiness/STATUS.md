@@ -112,7 +112,21 @@
 - D10: CTRL_BREAK → uvicorn graceful shutdown (логи подтверждают), код 3 = штатное внешнее
   завершение Windows console-процесса. Не дефект.
 
-## Фаза 10 — Живые smoke (прогрессивный / полный / отказы) — IN PROGRESS
+## Фаза 10 — Живые smoke — IN PROGRESS
+
+- **Headed smoke Дананга (2026-10-14, после всех фиксов):** first_card 11.6с, 538 отелей
+  (Sravni 400 partial/limit + Trip 150 ok), 950 офферов, 181 карточка, 0 ошибок UI,
+  exit 3 (контракт). **Пляжи Дананга: 200 ok-дистанций через новый
+  `photon_resolved_beach_geometry`** (Mỹ Khê, 112м–2.9км, реальные значения), 5 ok через
+  overpass-геометрию, 48 unknown + 13 error — честные статусы неразрешённых кандидатов.
+  До фикса в тех же условиях: 8 ok / 225 unknown. Улучшение покрытия ~25×.
+- Harness: headed Chromium восстановлен (`live_headed_search.py:26` headless=False).
+- **Инвентаризация фильтров (§10):** все 26 интерактивных контролов hotels.html
+  подключены к hotels.js; применение каждого проверено статически (price/rating/stars/
+  reviews/meal/cancellation/amenities/center/beach-distance/beach-line/room-mode/sort/
+  view). Кнопки отзывов: фиксировано (`36d97f9`).
+- Осталось: полный full-completion smoke с ожиданием rate-пула, failure/cancellation
+  smoke, мультигородовая матрица (Париж и др.), серия прогрессивных smoke.
 
 Аудит всех мест создания Chromium (grep `launch`/`headless` по `aviasales_collector/`):
 
