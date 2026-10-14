@@ -31,7 +31,33 @@
 - `node --check` (hotels.js, hotel_search_lifecycle.js) + `node --test
   tests/hotel_search_lifecycle.test.cjs` — **7/7 pass**.
 
-## Фаза 1 — Инвариант headed-only Trip.com — IN PROGRESS
+## Фаза 1 — Инвариант headed-only Trip.com — DONE
+
+- **Фикс `4feb1f8`:** `tripcom_rates.py:511` → `headless=False` (rate-браузер Trip.com
+  был headless с исходного дропа `2573f50`). Regression-гвард `tests/test_tripcom_headed_invariant.py`
+  (4 теста: AST-проверка launch-конфигураций всех Trip-файлов + запрет `headless=True` в них).
+  Targeted: 16 passed (rate-диагностика + enrichment + meal). Живое headed-подтверждение —
+  в smoke-фазе (задача 13). Discovery/login/headed остались нетронуты.
+- Scratch `live_headed_search.py:26` — вне репо, не прод-код; будет переведён в headed при
+  следующем использовании.
+
+## Фаза 2 — Flaky-тест и изоляция — DONE
+
+- **Фикс `8e6c075`:** conftest-фикстура переписана на точное восстановление: полный replace
+  содержимого словарей из снапшота (удаляет добавленное тестом), try/finally, охват всех
+  общих mutable-глобалов geo (PHOTON_CITY_EXTENTS, lock-карты, cooldowns, streaks) + скаляры
+  пейсинга. `tests/test_geo_global_isolation.py`: flaky-кейс 5× в одном процессе, leak-проба,
+  прямая проверка teardown (добавленное удалено, существующее восстановлено), production-кэш
+  работает. 627 passed × 2 полных прогона.
+
+## Фаза 3 — WAL и geo-кэш — DONE
+
+- **`4737eb4`:** WAL применяется через настоящий `init_hotel_store` на копии prod-БД
+  (delete → wal, integrity ok; путь: `web.py:413 create_app` → init). Кросс-процессный
+  geo-кэш: запись в child-процессе с явным `HOT_TICKETS_DB_PATH` → чтение свежим процессом;
+  без env — таблица в prod-БД не появляется; не-цифровые geo_id фильтруются. 630 passed.
+
+## Фаза 4 — Пляжи Дананга — IN PROGRESS
 
 Аудит всех мест создания Chromium (grep `launch`/`headless` по `aviasales_collector/`):
 
