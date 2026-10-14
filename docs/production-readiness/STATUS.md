@@ -57,7 +57,23 @@
   geo-кэш: запись в child-процессе с явным `HOT_TICKETS_DB_PATH` → чтение свежим процессом;
   без env — таблица в prod-БД не появляется; не-цифровые geo_id фильтруются. 630 passed.
 
-## Фаза 4 — Пляжи Дананга — IN PROGRESS
+## Фаза 4 — Пляжи Дананга — DONE
+
+- **Первопричина (доказано на smoke-БД 2026-10-14):** вечерняя нестабильность Overpass
+  (ReadTimeout/504, кулдауны до 112с) → 16/17 тайлов Дананга error → photon-fallback возвращал
+  пляжи только Point-центроидами → резолвер отказывался от всех кандидатов → 225/233 отелей
+  «unknown» без дистанции, хотя Mỹ Khê — реальный natural=beach в ~300м (живой probe Overpass:
+  relation 19000664).
+- **Фикс `c31e24a`:** в photon-ветке резолвится настоящая геометрия кандидатов через
+  nominatim по osm_id (`_beach_geometry`, существовавший, но непоключённый; кэш 30 дней),
+  лимит 5 кандидатов/3 геометрии. Метод `photon_resolved_beach_geometry`, confidence medium
+  (ближайшесть не доказана именным поиском). Неразрешённые кандидаты — по-прежнему честный
+  unknown; Point-центроиды отказываются; 429 не триггерит fallback. Фильтры cache-hit/
+  read_model/core принимают новые строки. 3 старых policy-теста обновлены (анти-фрод
+  assertions сохранены), новый файл тестов `test_beach_photon_geometry_fallback.py`.
+- **Проверка:** 634 passed × 2, compileall, node 7/7. Живой smoke Дананга — в задаче 13.
+
+## Фаза 5 — Унификация карточек/альтернативные номера Sravni — IN PROGRESS
 
 Аудит всех мест создания Chromium (grep `launch`/`headless` по `aviasales_collector/`):
 
