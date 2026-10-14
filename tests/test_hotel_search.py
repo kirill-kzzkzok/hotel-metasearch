@@ -18,7 +18,20 @@ import pytest
 from _pytest.monkeypatch import MonkeyPatch
 
 _ARCHIVE = Path(__file__).parents[1] / "fixtures" / "hotel_search_test_module.cpython-312.pyc.gz"
-_compiled = gzip.decompress(_ARCHIVE.read_bytes())
+# The archived module is the only surviving copy of these tests: the readable
+# source was lost to a corrupted AST-based rewrite before the repository was
+# published. The archive is tracked in git on purpose and pinned by sha256 in
+# tests/test_preserved_test_archive.py; a missing file raises a RuntimeError
+# with an actionable message instead of a bare FileNotFoundError.
+try:
+    _compiled = gzip.decompress(_ARCHIVE.read_bytes())
+except FileNotFoundError as _missing:
+    raise RuntimeError(
+        "incomplete checkout: tests/fixtures is a tracked, versioned file "
+        f"({_missing.filename}). Restore the repository with git checkout / "
+        "git lfs if you use it - the preserved hotel tests cannot run without "
+        "the archived bytecode module. See DECISIONS.md (reproducibility)."
+    ) from _missing
 if _compiled[:4] != importlib.util.MAGIC_NUMBER:
     raise RuntimeError("Preserved hotel tests require the Python 3.12 bytecode used for recovery")
 
