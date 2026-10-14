@@ -162,6 +162,16 @@
   (UI-фикс — только условие рендера, данные не тронуты).
 - **Финальная верификация:** 663 passed; node --check + 7/7 lifecycle; compileall чист;
   push `6129581..dbedcf9 master -> master`, дерево чистое.
+- **Пункт 4 закрыт (2026-10-14): фильтры живыми кликами.** 7 контролов через реальные
+  кнопки (`data-sort`/`data-rating`/`data-stars`/`data-distance`/`data-beach-distance`/
+  `data-cancellation`): 7/7 скрытые инпуты получили правильное значение; наблюдаемые
+  изменения набора: сортировки переупорядочивают, min-rating 26→15, min-stars 26→20,
+  до-центра-1км 26→0 (честный пустой результат строгого фильтра); пляж/отмена
+  проверены на пустом сете (value_matches=true). 0 ошибок UI.
+- **Пункт 3 закрыт: смоук с детьми.** Da Nang adults=2 + children=1: first_card 51.4с,
+  0 ошибок, дистанции/гео-строки на месте; query_json подтверждает children:1.
+- **Пункт 1 закрыт: WAL на prod-БД.** `hot-tickets.sqlite3` (552 МБ) на диске:
+  `journal_mode=wal`, integrity ok, `-wal` файл присутствует — D2 закрыт live-фактом.
 
 Аудит всех мест создания Chromium (grep `launch`/`headless` по `aviasales_collector/`):
 
