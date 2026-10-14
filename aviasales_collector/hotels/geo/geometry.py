@@ -760,18 +760,23 @@ def _resolve_nearest_beach(database_path: str | Path, coordinates: dict[str, Any
     features, feature_source = _overpass_beach_features(database_path, pair["lat"], pair["lng"])
     overpass_rate_limited = False
     overpass_source_failed = features is None
+    overpass_checked_no_beach = False
     if overpass_source_failed:
         # Preserve the exact upstream reason from the tile diagnostic. A 429
         # must not trigger another Overpass endpoint or an immediate burst.
         tile_key, _, _ = _overpass_tile_key(pair["lat"], pair["lng"])
         with closing(_profiled_sqlite_connect(str(database_path), timeout=10)) as connection:
             diagnostic_row = connection.execute(
-                "SELECT diagnostic_json FROM hotel_beach_search_cache WHERE tile_key=?",
+                "SELECT diagnostic_json, status FROM hotel_beach_search_cache WHERE tile_key=?",
                 (tile_key,),
             ).fetchone()
         diagnostic = _safe_json_loads(diagnostic_row[0], {}) if diagnostic_row else {}
         overpass_rate_limited = (isinstance(diagnostic, dict)
                                  and diagnostic.get("http_status") == 429)
+        # A not_found tile means Overpass answered successfully and there is no
+        # beach within the tile radius: the honest per-hotel answer is not_found,
+        # never masked as an unknown/availability problem.
+        overpass_checked_no_beach = bool(diagnostic_row and diagnostic_row[1] == "not_found")
         features = []
 
     photon_attempted = False
@@ -894,6 +899,10 @@ def _resolve_nearest_beach(database_path: str | Path, coordinates: dict[str, Any
         cache_status, legacy_status, available = "ok", "ok", True
     elif overpass_rate_limited or photon_failed or (overpass_source_failed and not photon_attempted):
         cache_status, legacy_status, available = "error", "error", False
+    elif overpass_checked_no_beach:
+        # Overpass answered: there is no beach in this tile. Photon returning
+        # only refused far candidates must not mask a proven negative.
+        cache_status, legacy_status, available = "not_found", "not_found", False
     elif photon_nearest_unverified:
         cache_status, legacy_status, available = "unknown", "unknown", None
     elif feature_source == "openstreetmap_photon_geometry" and features:
