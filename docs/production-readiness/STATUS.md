@@ -112,7 +112,9 @@
 - D10: CTRL_BREAK → uvicorn graceful shutdown (логи подтверждают), код 3 = штатное внешнее
   завершение Windows console-процесса. Не дефект.
 
-## Фаза 10 — Живые smoke — IN PROGRESS (матрица городов завершена)
+## Фаза 10 — Живые smoke — DONE (2026-10-14)
+
+Матрица городов закрыта (Дананг/Париж/Барселона/Бангкок — все 4 класса городов), failure/cancellation smoke, фильтры живыми кликами (7/7), смоук с детьми (adults=2 + children=1), rate fast-path smoke (12/12 отелей через in-page rate endpoint, D15). Phase 11 вердикт вынесен после этой фазы.
 
 - **Headed smoke Дананга (2026-10-14, после всех фиксов):** first_card 11.6с, 538 отелей
   (Sravni 400 partial/limit + Trip 150 ok), 950 офферов, 181 карточка, 0 ошибок UI,
@@ -201,13 +203,15 @@
   SQLite WAL, integrity/FK чист после kill+restart, честные статусы деградации
   (unknown/not_found/error/source_unavailable), exit code 3 = контракт (D10).
 - Производительность: first_card 181.7с → 11–55с (холодный/тёплый), gzip, rAF-чанки,
-  двойной парсинг raw_json устранён (`3a6755b`).
+  двойной парсинг raw_json устранён (`3a6755b`), rate-сбор через in-page rate endpoint
+  (`dd849fd`, D15): 1.2с/отель против 15–20с на detail-страницу, без их открытия.
 - Сохранность: коммиты атомарные, документация (GOAL/STATUS/DECISIONS) синхронизирована,
-  `origin/master` = HEAD (`dbedcf9`).
+  `origin/master` = HEAD.
 
 Внешние ограничения (честно, не обходились): вечерняя нестабильность Overpass (ReadTimeout/
-504 → cooldown-каскады, honest unknown); Trip-антибот сессионный (без живого логина —
-login_required/blocked, частичный coverage); VPN ломает Trip-навигацию (D3 — smoke без VPN).
+504 → cooldown-каскады, honest unknown); Trip-антибот сессионный — rate endpoint отвечает
+`htlSpiderActionErrorCode 4030` анонимному профилю, залогиненному (ручной логин
+пользователя) отдаёт полные тарифы; VPN ломает Trip-навигацию (D3 — smoke без VPN).
 
 ## Реестр задач
 
