@@ -32,9 +32,19 @@ TRIPCOM_RATE_FETCH_MAX_PAYLOAD_BYTES = 32 * 1024 * 1024
 
 _RATE_FETCH_URL = "https://ru.trip.com" + TRIPCOM_RATE_ENDPOINT_PATH
 
-_FETCH_JS = """async (hotelId) => {
+_FETCH_JS = """async (task) => {
   const body = JSON.parse(JSON.stringify(window.__rateTemplate));
-  body.search.hotelId = Number(hotelId);
+  body.search.hotelId = Number(task.hotelId);
+  // 2026-10-15 audit: the template is captured once per batch (with
+  // hotels[0] and children=0); every task must overwrite the occupancy and
+  // date fields too, otherwise rates are requested for the wrong guest
+  // composition while persistence records the task's composition.
+  body.search.checkIn = task.checkIn;
+  body.search.checkOut = task.checkOut;
+  body.search.adult = task.adult;
+  if (task.childInfoItems !== undefined) {
+    body.search.childInfoItems = JSON.parse(JSON.stringify(task.childInfoItems));
+  }
   const resp = await fetch(__RATE_FETCH_URL__, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -67,10 +77,15 @@ async def _capture_rate_template(page: Any, hotel: dict[str, Any]) -> dict[str, 
             if TRIPCOM_RATE_ENDPOINT_PATH in req.url else None)
     hotel_id = str(hotel.get("source_hotel_id") or "")
     city_id = str(hotel.get("city_id") or "1356")
+    # Capture with the task's own occupancy so the template's childInfoItems
+    # block matches the guest composition; per-task fields are overwritten on
+    # every fetch anyway, this keeps the captured head faithful.
+    children_count = int(hotel.get("children_count", 0) or 0)
     url = ("https://ru.trip.com/hotels/detail/?" + "&".join([
         f"hotelId={hotel_id}", f"cityId={city_id}",
         f"checkIn={hotel.get('check_in')}", f"checkOut={hotel.get('check_out')}",
-        f"adult={hotel.get('adults', 2)}", "children=0", "locale=ru-RU", "crn=1",
+        f"adult={hotel.get('adults', 2)}", f"children={children_count}",
+        "locale=ru-RU", "crn=1",
     ]))
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -141,8 +156,25 @@ async def collect_tripcom_room_rates_via_fetch(
                 started = time.perf_counter()
                 try:
                     fetch_started = time.perf_counter()
+                    # Dates/occupancy are per-task fields on the fetch body
+                    # (the captured template belongs to hotels[0]); the
+                    # template is now captured with the task's children=N so
+                    # its childInfoItems block is the site's own rendering of
+                    # this guest composition. Ages are only overwritten when
+                    # the app actually knows them - inventing ages would
+                    # fabricate the guest composition.
+                    fetch_task: dict[str, Any] = {
+                        "hotelId": hotel_id,
+                        "checkIn": str(hotel.get("check_in") or "").replace("-", ""),
+                        "checkOut": str(hotel.get("check_out") or "").replace("-", ""),
+                        "adult": int(hotel.get("adults", 2) or 2),
+                    }
+                    children_ages = [age for age in (hotel.get("children_ages") or [])
+                                     if isinstance(age, int) and 0 <= age <= 17]
+                    if children_ages:
+                        fetch_task["childInfoItems"] = [{"age": age} for age in children_ages]
                     outcome = await asyncio.wait_for(
-                        page.evaluate(_FETCH_JS, hotel_id),
+                        page.evaluate(_FETCH_JS, fetch_task),
                         timeout=TRIPCOM_RATE_FETCH_PER_HOTEL_TIMEOUT_SECONDS,
                     )
                 except asyncio.TimeoutError:
