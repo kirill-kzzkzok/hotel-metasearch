@@ -125,8 +125,16 @@
   подключены к hotels.js; применение каждого проверено статически (price/rating/stars/
   reviews/meal/cancellation/amenities/center/beach-distance/beach-line/room-mode/sort/
   view). Кнопки отзывов: фиксировано (`36d97f9`).
-- Осталось: полный full-completion smoke с ожиданием rate-пула, failure/cancellation
-  smoke, мультигородовая матрица (Париж и др.), серия прогрессивных smoke.
+- **Paris (метро, без пляжей) — DONE (2026-10-14):** headed smoke: первая карточка 47.8с
+  (холодный город: resolution + первая пагинация Sravni), 365 отелей Sravni (ok,
+  next_page_token_exhausted — естественный конец), 769 офферов, trip_com `login_required`
+  (свежий scratch-профиль без авторизации — честный source-unavailable, второй источник
+  выдаёт полные результаты), 0 ошибок UI, exit 3. Пляжи: «— до пляжа» на всех карточках —
+  корректно. Обнаружен и закрыт статус-дефект: 64 отеля на not_found-тайлах показывались
+  unknown → фикс `a8ff994` (not_found ≠ unknown, спека §7), 659 passed.
+- **Дананг (пляжи, без метро) — DONE:** см. фазу 10 выше.
+- Осталось: приморский город с метро (Барселона), город без метро/пляжей, failure/cancellation
+  smoke, серия прогрессивных smoke.
 
 Аудит всех мест создания Chromium (grep `launch`/`headless` по `aviasales_collector/`):
 
