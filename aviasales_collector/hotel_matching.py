@@ -135,6 +135,24 @@ def _image_keys(hotel: dict[str, Any]) -> set[str]:
     return keys
 
 
+@lru_cache(maxsize=131_072)
+def _token_address_matches(token: str, address_token: str) -> bool:
+    """Exact or fuzzy token equality, memoized.
+
+    The location-context scan (compare_hotels) evaluates this predicate for
+    every (place token, address token) combination of every candidate pair;
+    the same (place name, address) strings repeat across pairs, and a live
+    512-hotel finalize spent ~80% of its 2.9s in difflib ratio() calls here.
+    The predicate is a pure function of the two strings, so caching cannot
+    change match decisions - only their cost.
+    """
+    if token == address_token:
+        return True
+    if min(len(token), len(address_token)) < 3:
+        return False
+    return SequenceMatcher(None, token, address_token).ratio() >= 0.55
+
+
 def compare_hotels(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any] | None:
     if left.get("source") == right.get("source"):
         return None
@@ -169,10 +187,8 @@ def compare_hotels(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any
             if len(place_tokens) < 2 or not address_tokens:
                 continue
             matched_tokens = sum(
-                any(token == address_token or (
-                    min(len(token), len(address_token)) >= 3
-                    and SequenceMatcher(None, token, address_token).ratio() >= 0.55
-                ) for address_token in address_tokens)
+                any(_token_address_matches(token, address_token)
+                    for address_token in address_tokens)
                 for token in place_tokens
             )
             overlap = matched_tokens / len(place_tokens)
