@@ -73,7 +73,46 @@
   assertions сохранены), новый файл тестов `test_beach_photon_geometry_fallback.py`.
 - **Проверка:** 634 passed × 2, compileall, node 7/7. Живой smoke Дананга — в задаче 13.
 
-## Фаза 5 — Унификация карточек/альтернативные номера Sravni — IN PROGRESS
+## Фаза 5 — Альтернативные номера Sravni — DONE (отрицательный результат)
+
+- **Факт (по live raw pages):** контракт Sravni `/api/v1/search` даёт на отель
+  `offers[]` по одной на провайдера (yandex/ostrovok/tutu — разные OTA), без room-вариантов.
+  Повторных офферов одного провайдера нет (0 из всех отелей в снапшоте). Endpoint
+  hotel-rooms не существует. «Альтернативные варианты» Sravni = разные OTA-цены, это уже
+  показывается общей моделью карточек.
+- **Решение (spec §6 «не имитировать альтернативы, которых источник не даёт»):** не
+  добавлять. Зафиксировано в DECISIONS (D9).
+
+## Фаза 6 — Питание/удобства — DONE (проверено, без дефекта кода)
+
+- Meal-классификация (`classify_meal_plan`, meal_v4): разбор value/labels/text, EN+RU,
+  включённый/доплатный завтрак, HB/FB/AI, негативные паттерны. Покрытие по фактам источников:
+  Sravni 184 breakfast / 752 unknown (label отсутствует = честный unknown; API больше не даёт),
+  Trip rate-модель богата (breakfast_included/available, meal_available, meal_confidence,
+  meal_extra_amount). Удобства извлекаются только из структурированных полей (не по названию
+  и звёздам); отсутствующее ≠ подтверждённо отсутствующее. Дополнительный скрейп 400
+  deeplink-страниц за поиск признан непропорциональным — источник-ограничение зафиксировано.
+
+## Фаза 7 — «Личный номер» — DONE (семантика уже корректна, добавлены регрессии)
+
+- `classify_room_privacy`: shared (dorm/bed-in/capsule/койко) ≠ private; bed_type/название
+  тарифа сами по себе ничего не доказывают; unknown остаётся unknown. UI-режим 'private'
+  фильтрует офферы строго по `room_privacy == "private"`. Тесты: `7542685`
+  (17 кейсов EN+RU + проекция + live-source гвард предиката в `_finalize_search`).
+
+## Фаза 8 — Кнопка отзывов Sravni — DONE (`36d97f9`)
+
+- Первопричина: `canonical_url` (реальная страница отеля с отзывами на hotels.travel.ru)
+  отбрасывался нормализацией → у фронта не было кандидата URL. Фикс: `source_hotel_url`
+  через normalize→read_model→`reviewLink()`. Живая страница проверена (HTTP 200, отзывы).
+  6 тестов, полный набор 657 passed.
+
+## Фаза 9 — Exit code 3 — DONE (контракт подтверждён)
+
+- D10: CTRL_BREAK → uvicorn graceful shutdown (логи подтверждают), код 3 = штатное внешнее
+  завершение Windows console-процесса. Не дефект.
+
+## Фаза 10 — Живые smoke (прогрессивный / полный / отказы) — IN PROGRESS
 
 Аудит всех мест создания Chromium (grep `launch`/`headless` по `aviasales_collector/`):
 
