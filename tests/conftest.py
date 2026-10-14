@@ -1,35 +1,71 @@
-"""Test isolation: clear cross-test geo caches that leak state between tests.
+"""Test isolation: restore geo process-global state exactly around each test.
 
-The failing test test_beach_search_uses_city_and_country_slugs_and_rejects_beach_resorts
-(expected 2 photon requests) intermittently got only 1: PHOTON_CITY_EXTENTS is a
-module-global dict, so any earlier test that resolved 'da nang / vietnam' left a
-warm entry, removed the first expected call, and IndexError'd calls[1]. The same
-applies to module-global Overpass cooldown/pacing state left by transport tests.
-These globals are caches of EXTERNAL state, not production data: clearing them
-per-test makes each test see the same cold-start world.
+Root cause of the long-flaky beach test (IndexError at test_hotel_search.py:2292,
+~90% failure within the file): module-global geo caches leaked between tests in
+one pytest process. PHOTON_CITY_EXTENTS warmed by an earlier test removed the
+first expected photon request, and leftover Overpass cooldown/pacing state
+(_OverpassRequestDeferred subclasses TimeoutError, silently swallowed) removed
+the overpass request. Per-test clearing makes every test see a cold-start world.
+
+Exact restoration (mission spec §16): the previous .update(saved) restore kept
+entries a test added. Teardown now replaces the whole mapping content from a
+pre-test snapshot, so test-added entries are removed, and restores scalar
+pacing state under try/finally semantics. Production cache behavior itself is
+covered by tests/test_geo_global_isolation.py.
 """
 from __future__ import annotations
 
 import pytest
 
+_GLOBAL_DICTS = (
+    "aviasales_collector.hotels.geo.providers:PHOTON_CITY_EXTENTS",
+    "aviasales_collector.hotels.geo.providers:GEOCODE_PROPERTY_GENERIC",
+    "aviasales_collector.hotels.geo.providers:GEOCODE_REQUEST_LOCKS",
+    "aviasales_collector.hotels.geo.providers:PROVIDER_DETAIL_LOCKS",
+    "aviasales_collector.hotels.geo.geometry:GEO_FEATURE_TILE_LOCKS",
+    "aviasales_collector.hotels.geo.geometry:_OVERPASS_ENDPOINT_COOLDOWNS",
+    "aviasales_collector.hotels.geo.geometry:_OVERPASS_ENDPOINT_FAILURE_STREAKS",
+)
+_GLOBAL_SCALARS = (
+    "aviasales_collector.hotels.geo.geometry:_OVERPASS_NEXT_START_AT",
+    "aviasales_collector.hotels.geo.geometry:_OVERPASS_COOLDOWN_UNTIL",
+)
+
+
+def _resolve(dotted: str):
+    module_name, attr = dotted.rsplit(":", 1)
+    import importlib
+
+    module = importlib.import_module(module_name)
+    return module, attr, getattr(module, attr)
+
 
 @pytest.fixture(autouse=True)
-def _clear_geo_process_caches():
-    from aviasales_collector.hotels.geo import geometry, providers
-
-    saved_extents = dict(providers.PHOTON_CITY_EXTENTS)
-    providers.PHOTON_CITY_EXTENTS.clear()
-    saved_cooldowns = dict(geometry._OVERPASS_ENDPOINT_COOLDOWNS)
-    geometry._OVERPASS_ENDPOINT_COOLDOWNS.clear()
-    saved_streaks = dict(geometry._OVERPASS_ENDPOINT_FAILURE_STREAKS)
-    geometry._OVERPASS_ENDPOINT_FAILURE_STREAKS.clear()
-    saved_next_start = geometry._OVERPASS_NEXT_START_AT
-    saved_cooldown_until = geometry._OVERPASS_COOLDOWN_UNTIL
-    geometry._OVERPASS_NEXT_START_AT = 0.0
-    geometry._OVERPASS_COOLDOWN_UNTIL = 0.0
-    yield
-    providers.PHOTON_CITY_EXTENTS.update(saved_extents)
-    geometry._OVERPASS_ENDPOINT_COOLDOWNS.update(saved_cooldowns)
-    geometry._OVERPASS_ENDPOINT_FAILURE_STREAKS.update(saved_streaks)
-    geometry._OVERPASS_NEXT_START_AT = saved_next_start
-    geometry._OVERPASS_COOLDOWN_UNTIL = saved_cooldown_until
+def _restore_geo_process_globals():
+    saved: dict[str, tuple] = {}
+    for dotted in _GLOBAL_DICTS:
+        try:
+            module, attr, value = _resolve(dotted)
+        except Exception:
+            continue
+        if not isinstance(value, dict):
+            continue
+        saved[dotted] = (module, attr, value.copy())
+        value.clear()
+    for dotted in _GLOBAL_SCALARS:
+        try:
+            module, attr, value = _resolve(dotted)
+        except Exception:
+            continue
+        saved[dotted] = (module, attr, value)
+        setattr(module, attr, 0.0)
+    try:
+        yield
+    finally:
+        for module, attr, snapshot in saved.values():
+            current = getattr(module, attr)
+            if isinstance(current, dict):
+                current.clear()
+                current.update(snapshot)
+            else:
+                setattr(module, attr, snapshot)
