@@ -70,11 +70,31 @@ def _persist_detected_beach_profile(database_path: str | Path, city: str,
     feature has been selected near a verified hotel coordinate. Missing or
     failed geometry never becomes ``false``; it remains unknown and may be
     retried later.
+
+    2026-10-15: a curated profile is authoritative and must not be
+    overwritten. The live Brugge smoke had the curated inland=False profile
+    replaced by a detected=True one (register_city_geo_profile is
+    INSERT OR REPLACE) after OSM matched a small water-side feature tagged
+    natural=beach near the canal ring, and cards started showing «до пляжа»
+    for an inland city. Detection only fills gaps, never overrides curation.
     """
     resolved_city_slug = (city_slug or "-".join(
         part for part in re.split(r"[-_\s]+", city.casefold()) if part)).casefold()
     resolved_country_slug = (country_slug or "-".join(
         part for part in re.split(r"[-_\s]+", (country or "").casefold()) if part)).casefold()
+    if resolved_city_slug and resolved_country_slug:
+        with closing(_profiled_sqlite_connect(str(database_path), timeout=10)) as connection:
+            existing = connection.execute(
+                "SELECT is_beach_destination,source FROM hotel_city_geo_profile "
+                "WHERE city_slug=? AND country_slug=?",
+                (resolved_city_slug, resolved_country_slug),
+            ).fetchone()
+        if existing is not None and str(existing[1]) == "curated_city_destination_profile":
+            # The curated data file is authoritative: detection fills gaps,
+            # never overrides hand-curated city classification.
+            return CityGeoProfile(resolved_city_slug, resolved_country_slug,
+                                  bool(existing[0]), str(existing[1]), utc_now(),
+                                  "Curated profile preserved; detected geometry ignored.")
     profile = CityGeoProfile(
         resolved_city_slug, resolved_country_slug, True,
         "osm_beach_geometry_detection", utc_now(),
