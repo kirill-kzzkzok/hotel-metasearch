@@ -1125,12 +1125,12 @@ function openModal(title, bodyBuilder) {
 }
 function reviewLink(hotel) {
   const candidates = [hotel.review_url, hotel.reviews_url, hotel.property_details?.review_url,
-    hotel.property_details?.reviews_url];
+    hotel.property_details?.reviews_url, hotel.source_hotel_url];
   for (const detail of hotel.provider_details || []) {
-    candidates.push(detail?.review_url, detail?.reviews_url);
+    candidates.push(detail?.review_url, detail?.reviews_url, detail?.source_hotel_url);
   }
   for (const record of hotel.source_records || []) {
-    candidates.push(record?.review_url, record?.reviews_url);
+    candidates.push(record?.review_url, record?.reviews_url, record?.source_hotel_url);
   }
   const explicitReviewUrl = candidates.map(safeLink).find(Boolean);
   if (explicitReviewUrl) return explicitReviewUrl;

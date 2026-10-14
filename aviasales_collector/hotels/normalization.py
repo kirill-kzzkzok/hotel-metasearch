@@ -494,7 +494,26 @@ def normalize_hotel(item: dict[str, Any], observed_at: str | None = None,
         "raw_payload": item,
         "review_quotes": item.get("review_quotes") or [],
         "review_source": item.get("review_source"),
+        "source_hotel_url": _normalize_source_hotel_url(item.get("canonical_url")),
     }
+
+
+def _normalize_source_hotel_url(value: Any) -> str | None:
+    """Absolutize the source hotel page path (reviews live on that page).
+
+    SravniOtel returns canonical_url as a site-relative path like
+    /vietnam/cities/da-nang/7-seven-sea-hotel. The absolute page on the
+    source site carries the hotel reviews; a synthetic URL is never built
+    when the source provides none.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.startswith("http://") or text.startswith("https://"):
+        return text
+    if text.startswith("/"):
+        return f"https://hotels.travel.ru{text}"
+    return None
 
 def _normalize_hotel_stars(value: Any) -> float | None:
     """Return a valid provider star classification, or unknown for sentinels."""

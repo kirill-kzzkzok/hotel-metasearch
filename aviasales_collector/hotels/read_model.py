@@ -21,7 +21,8 @@ from .geo.core import (_coordinate_pair, _coordinate_source_metadata,
 from .geo.geometry import (_overpass_legacy_tile_key,
                            _overpass_nearby_tile_key, _overpass_tile_key)
 from .normalization import (_normalize_hotel_stars, _normalize_rating_fields,
-                            extract_amenities, normalize_beach_line)
+                            _normalize_source_hotel_url, extract_amenities,
+                            normalize_beach_line)
 from .runtime import (_profiled_sqlite_connect, _safe_json_list,
                       _safe_json_loads, log_search_timeline)
 from .schema import init_hotel_store
@@ -915,6 +916,10 @@ def _read_search(
                 "raw_payload": raw_hotel,
                 "review_quotes": raw_hotel.get("review_quotes") or [],
                 "review_source": raw_hotel.get("review_source"),
+                "source_hotel_url": (
+                    _normalize_source_hotel_url(raw_hotel.get("source_hotel_url"))
+                    or _normalize_source_hotel_url(raw_hotel.get("canonical_url"))
+                ),
                 "images": images,
                 "nearby_places": _safe_json_list(row["nearby_places_json"]),
                 "amenities": persisted_amenities,
