@@ -607,9 +607,9 @@ def _read_search(
             "features_json,source,status,retrieved_at", geo_keys,
         )
         hotel_build_started = time.perf_counter()
-        for row in hotels:
+        for row, key in zip(hotels, source_keys):
             row_started = time.perf_counter()
-            raw_hotel = _safe_json_loads(row["raw_json"], {})
+            raw_hotel = raw_hotels_by_key.get(key)
             if not isinstance(raw_hotel, dict):
                 raw_hotel = {}
             rating = row["rating"]
