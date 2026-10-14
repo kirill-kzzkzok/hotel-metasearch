@@ -167,9 +167,12 @@ def test_photon_representative_point_without_geometry_has_unknown_distance(tmp_p
         db, {"lat": 7.9, "lng": 98.3}, "Phuket", "Thailand", "phuket", "thailand", True,
     )
 
-    assert detail_lookups == []
-    # Photon returned only a partial, name-ranked beach inventory. Its closest
-    # candidates cannot establish the actual nearest beach distance.
+    assert detail_lookups == ["700", "701", "702", "703"], (
+        "geometry resolution is attempted for the bounded nearest candidates "
+        "(slice of at most 5 photon features)"
+    )
+    # Photon candidates whose real geometry cannot be resolved fall back to the
+    # honest unknown: no fabricated distance from a representative point.
     assert result["public_status"] == "unknown"
     assert result["status"] == "unknown"
     assert result["beach_geometry_available"] is None

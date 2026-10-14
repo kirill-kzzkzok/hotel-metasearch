@@ -263,7 +263,8 @@ def _location_summary(hotel: dict[str, Any], records: list[dict[str, Any]],
                   "confidence": record.get("cached_beach_confidence")})
         for record in records
         if record.get("cached_beach_method") != "nearest_osm_beach_point"
-        if record.get("cached_beach_source") != "openstreetmap_photon_geometry"
+        if (record.get("cached_beach_source") != "openstreetmap_photon_geometry"
+            or record.get("cached_beach_method") == "photon_resolved_beach_geometry")
         if isinstance(record.get("cached_beach_distance_meters"), (int, float))
         and math.isfinite(record["cached_beach_distance_meters"])
         and record["cached_beach_distance_meters"] >= 0

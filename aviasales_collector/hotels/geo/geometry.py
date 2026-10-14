@@ -714,7 +714,8 @@ def _resolve_nearest_beach(database_path: str | Path, coordinates: dict[str, Any
         cached = connection.execute(
             "SELECT distance_meters,beach_name,source,status,retrieved_at,beach_osm_type,"
             "beach_osm_id,beach_method,beach_confidence FROM hotel_beach_cache "
-            "WHERE (cache_key=? AND (source!='openstreetmap_photon_geometry' OR status!='ok') "
+            "WHERE (cache_key=? AND (source!='openstreetmap_photon_geometry' OR status!='ok' "
+            "OR COALESCE(beach_method,'')='photon_resolved_beach_geometry') "
             "AND COALESCE(beach_method,'')!='nearest_osm_beach_point') "
             "OR (cache_key IN (?,?) AND status='ok' "
             "AND source!='openstreetmap_photon_geometry' "
@@ -801,6 +802,39 @@ def _resolve_nearest_beach(database_path: str | Path, coordinates: dict[str, Any
             photon_nearest_unverified = photon_succeeded
             if not photon_succeeded:
                 photon_failed = True
+            else:
+                # Resolve real geometry for named photon candidates so the
+                # fallback still measures against the actual beach polygon
+                # (nominatim details, 30-day per-feature cache) instead of
+                # dropping every candidate as an unverifiable Point centroid.
+                # Bounded: the nearest few candidates, each usually cached.
+                resolved: list[dict[str, Any]] = []
+                photon_features = [feature for feature in payload.get("features", [])
+                                   if isinstance(feature, dict)]
+                for feature in photon_features[:5]:
+                    properties = feature.get("properties") or {}
+                    if not isinstance(properties, dict):
+                        continue
+                    if str(properties.get("osm_key") or "") != "natural" or str(properties.get("osm_value") or "") != "beach":
+                        continue
+                    osm_type = str(properties.get("osm_type") or "")
+                    osm_id = str(properties.get("osm_id") or "")
+                    if not osm_id.isdigit():
+                        continue
+                    geometry = _beach_geometry(database_path, osm_type, osm_id)
+                    if not isinstance(geometry, dict):
+                        continue
+                    resolved.append({
+                        "osm_type": osm_type.upper(),
+                        "osm_id": osm_id,
+                        "name": properties.get("name"),
+                        "tags": {"natural": "beach", "name": properties.get("name")},
+                        "geometry": geometry,
+                    })
+                    if len(resolved) >= 3:
+                        break
+                if resolved:
+                    features = resolved
         except (HTTPError, URLError, TimeoutError, OSError, ValueError, TypeError, HTTPClientException):
             photon_failed = True
             features = []
@@ -829,8 +863,15 @@ def _resolve_nearest_beach(database_path: str | Path, coordinates: dict[str, Any
     if beach_candidates:
         distance, selected_feature = min(beach_candidates, key=lambda item: item[0])
         is_point = (selected_feature.get("geometry") or {}).get("type") == "Point"
-        method = "nearest_osm_beach_point" if is_point else "nearest_osm_beach_geometry"
-        confidence = "medium" if is_point else "high"
+        if feature_source == "openstreetmap_photon_geometry":
+            # Geometry is real (resolved per OSM id), but the candidate set came
+            # from name search: nearest-ness is not proven, so the distance is
+            # labeled with medium confidence like point-based measurements.
+            method = "photon_resolved_beach_geometry"
+            confidence = "medium"
+        else:
+            method = "nearest_osm_beach_point" if is_point else "nearest_osm_beach_geometry"
+            confidence = "medium" if is_point else "high"
     selected = None
     if selected_feature and distance is not None:
         selected = {

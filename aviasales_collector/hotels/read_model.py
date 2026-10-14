@@ -681,7 +681,8 @@ def _read_search(
                 cached_beach = next((beach_cache_by_key.get(key) for key in (
                     beach_key, previous_beach_key, legacy_beach_key)
                                      if beach_cache_by_key.get(key) is not None
-                                     and beach_cache_by_key[key][2] != "openstreetmap_photon_geometry"
+                                     and (beach_cache_by_key[key][2] != "openstreetmap_photon_geometry"
+                                          or beach_cache_by_key[key][7] == "photon_resolved_beach_geometry")
                                      and beach_cache_by_key[key][7] != "nearest_osm_beach_point"), None)
                 if cached_beach:
                     try:

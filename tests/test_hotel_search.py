@@ -177,7 +177,11 @@ def test_nearest_osm_beach_geometry_beats_distant_feature(tmp_path, monkeypatch)
 
 
 def test_photon_beach_geometry_is_not_claimed_as_nearest_and_unknown_is_cached(tmp_path, monkeypatch):
-    """A verified Photon feature is still an incomplete nearest-beach search."""
+    """Photon name search cannot prove nearest-ness, but a resolved real
+    geometry is an honest medium-confidence distance (mission spec §7).
+
+    Legacy behavior (unknown for every photon candidate) left a full Da Nang
+    search without beach distances when Overpass had an evening outage."""
     import io
     import json
     import time
@@ -217,7 +221,7 @@ def test_photon_beach_geometry_is_not_claimed_as_nearest_and_unknown_is_cached(t
     def fake_urlopen(request, *args, **kwargs):
         url = request.full_url
         calls.append(url)
-        payload = detail if "/details?" in url else photon
+        payload = detail if "/details?osmtype=" in url else photon
         return Response(json.dumps(payload).encode())
 
     monkeypatch.setattr(hotel_search, "urlopen", fake_urlopen)
@@ -225,22 +229,27 @@ def test_photon_beach_geometry_is_not_claimed_as_nearest_and_unknown_is_cached(t
     coordinates = {"lat": 0, "lng": 0.011}
 
     outcome = _resolve_nearest_beach(path, coordinates, "Paris", "France", return_outcome=True)
-    assert outcome["status"] == "unknown"
-    assert outcome["public_status"] == "unknown"
-    assert "distance_meters" not in outcome
-    assert "osm_id" not in outcome
+    # Real geometry resolved for the photon candidate: honest distance,
+    # medium confidence, explicit method label, nearest-ness not claimed.
+    assert outcome["status"] == "ok"
+    assert outcome["distance_meters"] is not None
+    assert outcome["method"] == "photon_resolved_beach_geometry"
+    assert outcome["confidence"] == "medium"
+    assert outcome["osm_id"] == "123"
     assert any("q=beach+Paris+France" in url and "osm_tag=natural%3Abeach" in url
                for url in calls)
-    assert not any("/details?osmtype=" in url for url in calls)
+    assert any("/details?osmtype=" in url for url in calls)
 
     monkeypatch.setattr(hotel_search, "urlopen", lambda *_args, **_kwargs: pytest.fail("cache was bypassed"))
     cached = _resolve_nearest_beach(path, coordinates, "Paris", "France", return_outcome=True)
-    assert cached["status"] == "unknown"
-    assert "distance_meters" not in cached
+    assert cached["status"] == "ok"
+    assert cached["distance_meters"] is not None
+    assert cached["method"] == "photon_resolved_beach_geometry"
 
 
 def test_stale_negative_beach_cache_retries_but_keeps_photon_distance_unknown(tmp_path, monkeypatch):
-    """A stale negative cache retries discovery without trusting incomplete Photon results."""
+    """A stale negative cache retries discovery and can now resolve a real
+    photon-candidate geometry (medium confidence) instead of staying unknown."""
     import io
     import json
     from datetime import datetime, timedelta, timezone
@@ -269,6 +278,11 @@ def test_stale_negative_beach_cache_retries_but_keeps_photon_distance_unknown(tm
                         "osm_id": 123, "name": "Verified Beach"},
         "geometry": {"type": "Point", "coordinates": [2.36, 48.8566]},
     }]}
+    detail = {
+        "geometry": {"type": "LineString", "coordinates": [
+            [2.3500, 48.8560], [2.3650, 48.8570], [2.3700, 48.8560],
+        ]},
+    }
     calls = []
 
     class Response(io.BytesIO):
@@ -279,14 +293,16 @@ def test_stale_negative_beach_cache_retries_but_keeps_photon_distance_unknown(tm
 
     def fake_urlopen(request, *args, **kwargs):
         calls.append(request.full_url)
-        return Response(json.dumps(photon).encode())
+        payload = detail if "/details?osmtype=" in request.full_url else photon
+        return Response(json.dumps(payload).encode())
 
     monkeypatch.setattr(hotel_search, "urlopen", fake_urlopen)
     outcome = _resolve_nearest_beach(path, coordinates, "Paris", "France", return_outcome=True)
-    assert outcome["status"] == "unknown"
-    assert outcome["public_status"] == "unknown"
-    assert "distance_meters" not in outcome
-    assert not any("/details?osmtype=" in url for url in calls)
+    assert outcome["status"] == "ok"
+    assert outcome["distance_meters"] is not None
+    assert outcome["method"] == "photon_resolved_beach_geometry"
+    assert outcome["confidence"] == "medium"
+    assert any("/details?osmtype=" in url for url in calls)
 
 
 def test_remote_photon_beach_without_shoreline_geometry_is_unknown(tmp_path, monkeypatch):

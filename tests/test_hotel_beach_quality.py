@@ -214,10 +214,16 @@ def test_photon_candidates_cannot_prove_nearest_beach_distance(tmp_path, monkeyp
         "example-coastal-city", "thailand", True,
     )
 
-    assert outcome["public_status"] == "unknown"
-    assert "distance_meters" not in outcome
-    assert "osm_id" not in outcome
-    assert checked == []
+    # Photon candidates with resolvable real geometry now produce an honest
+    # medium-confidence distance (bounded to the nearest few candidates).
+    assert outcome["status"] == "ok"
+    assert outcome["distance_meters"] is not None
+    assert outcome["method"] == "photon_resolved_beach_geometry"
+    assert outcome["confidence"] == "medium"
+    assert outcome["public_status"] == "available"
+    assert 0 < len(checked) <= 3, (
+        "geometry resolution must stay bounded (max 3 candidates per hotel)"
+    )
 
 
 def test_empty_photon_search_after_overpass_failure_is_unknown_not_not_found(tmp_path, monkeypatch):
