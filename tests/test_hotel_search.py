@@ -10,9 +10,11 @@ from __future__ import annotations
 import gzip
 import importlib
 import importlib.util
+import json
 import marshal
 import types
 from pathlib import Path
+from urllib.parse import parse_qs
 
 import pytest
 from _pytest.monkeypatch import MonkeyPatch
@@ -68,6 +70,12 @@ _MIGRATED_TESTS = {
     "test_trip_page_cannot_clear_sravni_cursor",
     "test_sravni_failure_does_not_discard_trip_results",
     "test_sravni_live_search_partial_trip_failure_and_cursor_pagination",
+    # 2026-10-15: the archived version asserted ONE combined nearby query
+    # (urlopen called once). The production contract is now staged - a
+    # metro-first query (around:2000) plus a fail-safe wide sweep
+    # (around:8000, airports/landmarks) - so a cold lookup issues two
+    # requests while keeping the tile cache reuse assertion intact.
+    "test_osm_nearby_places_use_nearest_features_and_tile_cache",
 }
 globals().update({
     name: value for name, value in vars(_legacy).items()
@@ -356,3 +364,54 @@ def test_remote_photon_beach_without_shoreline_geometry_is_unknown(tmp_path, mon
     assert result["public_status"] == "unknown"
     assert result["status"] == "unknown"
     assert result.get("distance_meters") is None
+
+
+def test_osm_nearby_places_use_nearest_features_and_tile_cache(tmp_path, monkeypatch):
+    """Readable replacement for the archived single-query version.
+
+    The archived bytecode asserted urlopen was called once for a combined
+    5-category nearby query. Since 2026-10-15 the lookup is staged (metro
+    first at around:2000, then a fail-safe wide sweep at around:8000), so a
+    cold lookup issues exactly two requests; the second read of the same
+    tile must be served from cache without any new request. Nearest feature
+    per category keeps its original assertion.
+    """
+    from aviasales_collector.hotels.geo import geometry
+
+    db = tmp_path / "nearby-geo.sqlite3"
+    init_hotel_store = __import__("aviasales_collector.hotel_search").hotel_search.init_hotel_store
+    init_hotel_store(db)
+
+    metro_payload = {"elements": [
+        {"type": "node", "id": 1, "lat": 25.001, "lon": 55.0,
+         "tags": {"railway": "subway_entrance", "name": "Closest Metro"}},
+        {"type": "node", "id": 2, "lat": 25.01, "lon": 55.0,
+         "tags": {"railway": "subway_entrance", "name": "Farther Metro"}},
+    ]}
+    wide_payload = {"elements": [
+        {"type": "way", "id": 3, "center": {"lat": 25.002, "lon": 55.0},
+         "tags": {"tourism": "attraction", "name": "Old Fort"}},
+    ]}
+    calls = []
+
+    def fake_overpass(_url, data, _headers, stage, _max_bytes, deadline_seconds=12.0):
+        raw = data if isinstance(data, str) else str(data, "utf-8")
+        body = parse_qs(raw).get("data", [""])[0]
+        calls.append(body)
+        if "subway_entrance" in body:
+            return json.dumps(metro_payload).encode("utf-8")
+        return json.dumps(wide_payload).encode("utf-8")
+
+    monkeypatch.setattr(geometry, "_overpass_post", fake_overpass)
+
+    first = geometry._osm_nearby_features(db, {"lat": 25.0, "lng": 55.0})
+    second = geometry._osm_nearby_features(db, {"lat": 25.0, "lng": 55.0})
+
+    assert first["places"]["metro"]["name"] == "Closest Metro"
+    assert first["places"]["landmark"]["name"] == "Old Fort"
+    assert first["source"] == "openstreetmap_overpass"
+    # Staged contract: exactly two queries on a cold tile (metro + wide).
+    assert len(calls) == 2, f"expected 2 staged queries, got {len(calls)}"
+    # Tile cache reuse: the second read must not issue new requests.
+    assert second["places"]["metro"]["name"] == "Closest Metro"
+    assert len(calls) == 2

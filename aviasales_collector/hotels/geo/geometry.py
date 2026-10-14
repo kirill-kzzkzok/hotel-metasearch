@@ -348,102 +348,137 @@ def _osm_nearby_features(database_path: str | Path,
 
         source = "openstreetmap_overpass"
         if features is None:
-            around = f"(around:8000,{center_lat:.6f},{center_lon:.6f})"
-            query = ("[out:json][timeout:15];("
-                     f"nwr[\"railway\"=\"subway_entrance\"]{around};"
-                     f"nwr[\"station\"=\"subway\"]{around};"
-                     f"nwr[\"aeroway\"~\"^(aerodrome|terminal)$\"]{around};"
-                     f"nwr[\"tourism\"~\"^(attraction|museum)$\"]{around};"
-                     f"nwr[\"historic\"~\"^(castle|fort|monument|memorial|archaeological_site)$\"]{around};"
-                     ");out center tags;")
-            request = Request(
-                "https://overpass-api.de/api/interpreter",
-                data=urlencode({"data": query}).encode("utf-8"),
-                headers={"User-Agent": "HotelMetaSearch/0.1 (nearby hotel geography)",
-                         "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+            # 2026-10-15 live audit: one 5-category query with around:8000 is
+            # the load that kills the Overpass dispatcher in busy periods -
+            # measured 0/7 successful round trips while a metro-only query at
+            # around:2000 succeeded consistently (1-5s). Split the lookup so
+            # the highest-UI-value category (metro distance on cards) cannot
+            # be starved by the heavy landmark/airport set:
+            # stage 1 - metro (2km: a useful "nearest metro" radius);
+            # stage 2 - airports and landmarks (11km, fail-safe).
+            metro_radius_m = 2000
+            wide_radius_m = 8000
+            stage_queries = (
+                (
+                    f"(around:{metro_radius_m},{center_lat:.6f},{center_lon:.6f})",
+                    ('nwr["railway"="subway_entrance"]{around};'
+                     'nwr["station"="subway"]{around};'),
+                    "nearby_overpass",
+                ),
+                (
+                    f"(around:{wide_radius_m},{center_lat:.6f},{center_lon:.6f})",
+                    ('nwr["aeroway"~"^(aerodrome|terminal)$"]{around};'
+                     'nwr["tourism"~"^(attraction|museum)$"]{around};'
+                     'nwr["historic"~"^(castle|fort|monument|memorial|archaeological_site)$"]{around};'),
+                    "nearby_overpass_wide",
+                ),
             )
-            try:
-                body = _overpass_post(
-                    "https://overpass-api.de/api/interpreter",
-                    urlencode({"data": query}).encode("utf-8"),
-                    {"User-Agent": "HotelMetaSearch/0.1 (nearby hotel geography)",
-                     "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
-                    "nearby_overpass", 4 * 1024 * 1024,
-                )
-                if len(body) > 4 * 1024 * 1024:
-                    raise ValueError("Nearby OSM response exceeded size limit")
-                payload = json.loads(body)
-                elements = payload.get("elements") if isinstance(payload, dict) else None
-                if not isinstance(elements, list):
-                    raise ValueError("Nearby OSM response did not contain elements")
-                collected: dict[tuple[str, str], dict[str, Any]] = {}
-                for element in elements:
-                    if not isinstance(element, dict):
-                        continue
-                    tags = element.get("tags") if isinstance(element.get("tags"), dict) else {}
-                    railway = str(tags.get("railway") or "").casefold()
-                    station = str(tags.get("station") or "").casefold()
-                    aeroway = str(tags.get("aeroway") or "").casefold()
-                    tourism = str(tags.get("tourism") or "").casefold()
-                    historic = str(tags.get("historic") or "").casefold()
-                    amenity = str(tags.get("amenity") or "").casefold()
-                    shop = str(tags.get("shop") or "").casefold()
-                    categories = []
-                    if railway == "subway_entrance" or station == "subway":
-                        categories.append("metro")
-                    if aeroway in {"aerodrome", "terminal"}:
-                        categories.append("airport")
-                    if tourism in {"attraction", "museum"} or historic:
-                        categories.append("landmark")
-                    # Keep parsing these categories for cached/fixture data;
-                    # the production query is intentionally narrower and no
-                    # longer requests them from Overpass.
-                    if amenity in {"restaurant", "cafe"}:
-                        categories.append("restaurant")
-                    if shop in {"mall", "department_store"}:
-                        categories.append("shopping")
-                    if not categories:
-                        continue
-                    lat = element.get("lat")
-                    lon = element.get("lon")
-                    if lat is None or lon is None:
-                        center = element.get("center") if isinstance(element.get("center"), dict) else {}
-                        lat, lon = center.get("lat"), center.get("lon")
-                    point = _coordinate_pair({"lat": lat, "lng": lon})
-                    if not point:
-                        continue
-                    if _haversine_m(center_lat, center_lon, point["lat"], point["lng"]) > 11_000:
-                        continue
-                    element_id = str(element.get("id") or "")
-                    element_type = str(element.get("type") or "")
-                    if not element_id or not element_type:
-                        continue
-                    for category in categories:
-                        collected[(element_type, element_id, category)] = {
-                            "name": " ".join(str(tags.get("name") or "").split()) or None,
-                            "type": category, "latitude": point["lat"], "longitude": point["lng"],
-                            "source": source, "osm_type": element_type, "osm_id": element_id,
-                            "tags": {key: tags[key] for key in
-                                     ("railway", "station", "aeroway", "tourism", "historic", "amenity", "shop")
-                                     if key in tags},
-                        }
-                features = list(collected.values())
-                status = "ok" if features else "not_found"
-            except (HTTPError, URLError, TimeoutError, OSError, ValueError, TypeError,
-                    HTTPClientException, httpx.HTTPError) as exc:
-                diagnostic = {
-                    "query_type": "nearby_poi_features", "exception": type(exc).__name__,
-                    "message": str(exc)[:500], "timeout_stage": "transport" if isinstance(
-                        exc, (TimeoutError, httpx.TimeoutException)) else None,
-                    "http_status": getattr(getattr(exc, "response", None), "status_code", None),
+            collected: dict[tuple[str, str, str], dict[str, Any]] = {}
+            status = "ok"
+            elements_count = 0
+            last_exc: Exception | None = None
+            for around, selectors, stage in stage_queries:
+                query = ("[out:json][timeout:15];(" + selectors.format(around=around) + ");out center tags;")
+                try:
+                    body = _overpass_post(
+                        "https://overpass-api.de/api/interpreter",
+                        urlencode({"data": query}).encode("utf-8"),
+                        {"User-Agent": "HotelMetaSearch/0.1 (nearby hotel geography)",
+                         "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+                        stage, 4 * 1024 * 1024,
+                        # The query itself declares [timeout:15]; a 3s default made
+                        # every metro/landmark lookup fail whenever Overpass answers
+                        # slowly (measured 7.5s round trips on 2026-10-15), so the
+                        # endpoint was effectively dead for nearby features while
+                        # beach geometry (12s deadline) kept working.
+                        deadline_seconds=12.0,
+                    )
+                    if len(body) > 4 * 1024 * 1024:
+                        raise ValueError("Nearby OSM response exceeded size limit")
+                    payload = json.loads(body)
+                    stage_elements = payload.get("elements") if isinstance(payload, dict) else None
+                    if not isinstance(stage_elements, list):
+                        raise ValueError("Nearby OSM response did not contain elements")
+                    elements_count += len(stage_elements)
+                    for element in stage_elements:
+                        if not isinstance(element, dict):
+                            continue
+                        raw_tags = element.get("tags")
+                        tags = raw_tags if isinstance(raw_tags, dict) else {}
+                        railway = str(tags.get("railway") or "").casefold()
+                        station = str(tags.get("station") or "").casefold()
+                        aeroway = str(tags.get("aeroway") or "").casefold()
+                        tourism = str(tags.get("tourism") or "").casefold()
+                        historic = str(tags.get("historic") or "").casefold()
+                        categories = []
+                        if railway == "subway_entrance" or station == "subway":
+                            categories.append("metro")
+                        if aeroway in {"aerodrome", "terminal"}:
+                            categories.append("airport")
+                        if tourism in {"attraction", "museum"} or historic:
+                            categories.append("landmark")
+                        # Keep parsing these categories for cached/fixture data;
+                        # the production query is intentionally narrower and no
+                        # longer requests them from Overpass.
+                        amenity = str(tags.get("amenity") or "").casefold()
+                        shop = str(tags.get("shop") or "").casefold()
+                        if amenity in {"restaurant", "cafe"}:
+                            categories.append("restaurant")
+                        if shop in {"mall", "department_store"}:
+                            categories.append("shopping")
+                        if not categories:
+                            continue
+                        lat = element.get("lat")
+                        lon = element.get("lon")
+                        if lat is None or lon is None:
+                            center = element.get("center") if isinstance(element.get("center"), dict) else {}
+                            lat, lon = center.get("lat"), center.get("lon")
+                        point = _coordinate_pair({"lat": lat, "lng": lon})
+                        if not point:
+                            continue
+                        if _haversine_m(center_lat, center_lon, point["lat"], point["lng"]) > 11_000:
+                            continue
+                        element_id = str(element.get("id") or "")
+                        element_type = str(element.get("type") or "")
+                        if not element_id or not element_type:
+                            continue
+                        for category in categories:
+                            collected[(element_type, element_id, category)] = {
+                                "name": " ".join(str(tags.get("name") or "").split()) or None,
+                                "type": category, "latitude": point["lat"], "longitude": point["lng"],
+                                "source": source, "osm_type": element_type, "osm_id": element_id,
+                                "tags": {key: tags[key] for key in
+                                         ("railway", "station", "aeroway", "tourism", "historic", "amenity", "shop")
+                                         if key in tags},
+                            }
+                except (HTTPError, URLError, TimeoutError, OSError, ValueError, TypeError,
+                        HTTPClientException, httpx.HTTPError) as exc:
+                    # Stage 2 failing must not discard stage 1 results: metro
+                    # distances are the primary card feature, and a wide
+                    # landmark sweep is optional enrichment.
+                    last_exc = exc
+                    if not collected:
+                        status = "error"
+            features = list(collected.values()) if status == "ok" or collected else None
+            if status == "ok" and not features:
+                status = "not_found"
+            diagnostic = (
+                {
+                    "query_type": "nearby_poi_features",
+                    "exception": type(last_exc).__name__,
+                    "message": str(last_exc)[:500],
+                    "timeout_stage": "transport" if isinstance(
+                        last_exc, (TimeoutError, httpx.TimeoutException)) else None,
+                    "http_status": getattr(getattr(last_exc, "response", None), "status_code", None),
                     "retrieved_at": utc_now(),
+                } if last_exc is not None or status == "error" else
+                {
+                    "query_type": "nearby_poi_features", "objects": elements_count,
+                    "features": len(features or []), "retrieved_at": utc_now(),
                 }
-                status, features = "error", None
-            else:
-                diagnostic = {
-                    "query_type": "nearby_poi_features", "objects": len(elements),
-                    "features": len(features), "retrieved_at": utc_now(),
-                }
+            )
+            if status == "error":
+                features = None
             with closing(_profiled_sqlite_connect(str(database_path), timeout=10)) as connection:
                 connection.execute(
                     "INSERT OR REPLACE INTO hotel_geo_feature_cache "

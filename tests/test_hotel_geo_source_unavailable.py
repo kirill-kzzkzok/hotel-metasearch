@@ -56,7 +56,10 @@ def test_nearby_overpass_failure_is_terminal_source_unavailable_and_keeps_retry_
     second = geometry._osm_nearby_features(db, coordinates)
     assert second["status"] == "source_unavailable"
     assert second["places"] == {}
-    assert calls == 1
+    # 2026-10-15: nearby lookups are staged (metro first, wide sweep second),
+    # so a cold miss issues two _overpass_post calls; the cached error row must
+    # still prevent an immediate retry on the next read.
+    assert calls == 2
 
     hotel = {"location": {
         "coordinates": coordinates,
