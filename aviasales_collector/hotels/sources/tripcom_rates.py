@@ -508,7 +508,7 @@ async def collect_tripcom_room_rates(hotels: list[dict[str, Any]], profile: str 
         browser_started = time.perf_counter()
         log_search_timeline(search_id, "rate_browser_launch_started", workers=page_count)
         context = await playwright.chromium.launch_persistent_context(
-            str(Path(profile).expanduser().resolve()), headless=True, locale="ru-RU",
+            str(Path(profile).expanduser().resolve()), headless=False, locale="ru-RU",
             viewport={"width": 1440, "height": 1000},
             # Existing Trip profiles may have a service worker that bypasses page
             # routes, making payload capture depend on stale worker state.
