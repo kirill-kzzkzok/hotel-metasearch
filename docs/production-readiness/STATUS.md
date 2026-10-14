@@ -175,28 +175,33 @@
 - **Пункт 1 закрыт: WAL на prod-БД.** `hot-tickets.sqlite3` (552 МБ) на диске:
   `journal_mode=wal`, integrity ok, `-wal` файл присутствует — D2 закрыт live-фактом.
 
-Аудит всех мест создания Chromium (grep `launch`/`headless` по `aviasales_collector/`):
+Аудит всех мест создания Chromium (grep `launch`/`headless` по `aviasales_collector/`) —
+**историческая таблица (состояние до фикса; закрыта коммитом `4feb1f8`, см. фазу 1 и задачу 1
+реестра). На HEAD все Trip-пути `headless=False`, гвард
+`tests/test_tripcom_headed_invariant.py` (включая `tripcom_rate_fetch.py`).**
 
-| Место | Режим | Статус |
+| Место | Режим на момент аудита | Статус |
 |---|---|---|
 | `hotels/sources/tripcom.py:83` (discovery, persistent profile) | `headless=False` | OK |
-| `hotels/sources/tripcom_rates.py:511` (rate-браузер, persistent profile) | **`headless=True`** | **P0 НАРУШЕНИЕ** — реальный путь Trip.com rate-задач, headless с самого `2573f50` |
+| `hotels/sources/tripcom_rates.py:511` (rate-браузер, persistent profile) | **`headless=True`** | **P0 НАРУШЕНИЕ** (закрыто: `4feb1f8` → `headless=False`; rate fast-path 12/12 в headed — D15) |
 | `tripcom_login.py:21` (авторизация) | `headless=False` | OK |
 | `collector.py:58` + `cli.py:34` (авиасейлс-коллектор, не Trip) | headless по флагу CLI | вне инварианта (не Trip.com) |
 
-План: перевести `tripcom_rates.py:511` в `headless=False`, добавить regression-тест
-(запрет headless в launch-конфигурации реального Trip-пути), smoke в headed.
-Риск: фоновые прогоны rate-пула на машине без дисплея → зафиксировать как блокер, не
-подменяя headless-прогоном.
+План (выполнен `4feb1f8`; regression-тест `tests/test_tripcom_headed_invariant.py`,
+покрывает все 4 Trip-файла): перевести `tripcom_rates.py:511` в `headless=False`,
+добавить regression-тест (запрет headless в launch-конфигурации реального Trip-пути),
+smoke в headed (выполнен: фаза 10, rate fast-path, D15).
 
 ## Фаза 11 — Финальный вердикт — DONE (2026-10-14)
 
 **PRODUCTION READY: YES** (в рамках зафиксированных внешних ограничений).
 
 Критерии §22:
-- Функциональность: мультисити-матрица (Дананг/Париж/Барселона/Бангкок — 4 класса городов,
+- **Функциональность:** мультисити-матрица (Дананг/Париж/Барселона/Бангкок — 4 класса городов,
   живые headed-прогоны), изоляция перекрывающихся поисков, headed-only Trip (инвариант +
-  AST-гвард), полнота (546–806 отелей, честные limits), единые карточки, питание/приватность/
+  AST-гвард), полнота (живые прогоны фазы 10: Дананг 538→731, Париж 365 отелей, честные
+  limits; до-миссионный диапазон «546–806» — 546 из MISSION-SPEC.md:582, «806» артефактами
+  не подтверждён, снят с вердикта), единые карточки, питание/приватность/
   cancellation-семантика проверены, расстояния (пляж/метро/аэропорт/центр/достопримечательности),
   кнопки (reviewUrl `36d97f9`), UI-правило пляжной строки (`aad381c`).
 - Надёжность: flaky устранён (D1/D2 conftest-изоляция), 663 passed ×2 без флейков,
