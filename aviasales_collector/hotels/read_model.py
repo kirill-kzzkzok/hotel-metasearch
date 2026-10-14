@@ -274,10 +274,17 @@ def _read_search(
         query = _safe_json_loads(session["query_json"], {})
         if not isinstance(query, dict):
             query = {}
-        beach_profile = _read_city_geo_profile(
-            connection, query.get("city_name") or "", query.get("country"),
-            query.get("city_slug"), query.get("country_slug"),
-        )
+        beach_profile = None
+        if not matching_only:
+            # The matching-only path (pagination evidence) must not issue
+            # enrichment lookups (batching contract, see
+            # test_hotel_read_model_batching); the public card path reads the
+            # city profile here and merged canonical records carry
+            # cached_beach_relevant through hotel_matching.
+            beach_profile = _read_city_geo_profile(
+                connection, query.get("city_name") or "", query.get("country"),
+                query.get("city_slug"), query.get("country_slug"),
+            )
         hotel_sql = "SELECT * FROM hotel_observation WHERE search_id=?"
         hotel_params: list[Any] = [search_id]
         if source_hotel_ids is not None and source_identity_keys is not None:
@@ -368,10 +375,6 @@ def _read_search(
                     "coordinates": matching_coordinates,
                     "images": images,
                     "nearby_places": _safe_json_list(row["nearby_places_json"]),
-                    "cached_beach_relevant": (
-                        beach_profile.is_beach_destination
-                        if beach_profile is not None else None
-                    ),
                     "_match_evidence": {
                         "address": row["address"],
                         "stars": stars,
