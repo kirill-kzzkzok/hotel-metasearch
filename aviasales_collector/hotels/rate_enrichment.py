@@ -23,6 +23,18 @@ from .sources.tripcom_rates import collect_tripcom_room_rates
 from .sources.tripcom_rate_fetch import collect_tripcom_room_rates_via_fetch
 
 
+def _tripcom_rate_fast_path_enabled() -> bool:
+    """Fast path is the default outside tests; opt out with TRIPCOM_RATE_FAST_FETCH=0.
+
+    Exposed as a module-level function so tests can substitute it directly:
+    pytest re-creates the PYTEST_CURRENT_TEST env var on every test phase,
+    which makes deleting it from a fixture ineffective.
+    """
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return False
+    return os.getenv("TRIPCOM_RATE_FAST_FETCH", "1") == "1"
+
+
 def _persist_rate_task_lifecycle(database_path: str | Path, search_id: str,
                                  tasks: list[dict[str, Any]], query: dict[str, Any],
                                  status: str) -> None:
@@ -182,24 +194,24 @@ async def enrich_tripcom_room_rates(
         }
     log_search_timeline(search_id, "rate_queue_prepared", scheduled=len(tasks),
                         reused=len(reused_outcomes), concurrency=payload.get("concurrency", 5))
-    # Accounting rows appear before browser work so an interrupted pool is
-    # observable: expected/created are countable even if no task reaches
-    # terminal. The "queued" status is non-terminal and excluded from reuse.
-    await asyncio.to_thread(
-        _persist_rate_task_lifecycle, database_path, search_id, tasks, query, "queued",
-    )
     profile_setting = os.getenv("TRIP_COM_BROWSER_DATA_DIR")
     profile = Path(profile_setting).expanduser().resolve() if profile_setting else DEFAULT_TRIP_PROFILE
     if not TRIP_PROFILE_LOCK.acquire(blocking=False):
         raise HotelSearchOperationError("browser_busy", "Trip.com browser is busy; retry this enrichment later")
     persistence_lock = asyncio.Lock()
     timeline_token = _ACTIVE_SEARCH_TIMELINE_ID.set(search_id)
+    # Outcomes that already reached the database through on_result. If the
+    # fast path crashes mid-run, these partial results are restored into the
+    # response instead of being lost, and the detail-page fallback skips
+    # them so the same hotel cannot be collected and persisted twice.
+    persisted_outcomes: dict[str, dict[str, Any]] = {}
 
     async def persist_completed_rate_result(index: int, outcome: dict[str, Any]) -> None:
         persist_started = time.perf_counter()
         task = tasks[index]
-        outcome["attempt"] = int(task.get("attempt", outcome.get("attempt", 1)))
-        outcome["retry_count"] = int(task.get("retry_count", outcome.get("retry_count", 0)))
+        persisted_outcomes[str(task["source_hotel_id"])] = outcome
+        outcome["attempt"] = int(task.get("attempt") or outcome.get("attempt") or 1)
+        outcome["retry_count"] = int(task.get("retry_count") or outcome.get("retry_count") or 0)
         outcome["error_message"] = _sanitize_enrichment_error_message(outcome.get("error_message"))
         outcome.setdefault("operation", "tripcom_detail_rate_inventory")
         outcome.setdefault("attempt", 1)
@@ -251,58 +263,91 @@ async def enrich_tripcom_room_rates(
         log_search_timeline(search_id, "rate_browser_profile_released",
                             elapsed_ms=round((time.perf_counter() - shutdown_started) * 1000, 1))
         log.info("[TRIP_BROWSER_START] stage=room_rate_enrichment profile_released=true")
+        # Accounting rows appear before browser work so an interrupted pool is
+        # observable: expected/created are countable even if no task reaches
+        # terminal. The "queued" status is non-terminal and excluded from reuse.
+        # Written only after the profile lock is held: a request that loses
+        # the browser-busy race must not leave queued rows newer than the
+        # winner's terminal rows.
+        await asyncio.to_thread(
+            _persist_rate_task_lifecycle, database_path, search_id, tasks, query, "queued",
+        )
         pool_started = time.perf_counter()
         log_search_timeline(search_id, "rate_pool_started", workers=min(int(payload.get("concurrency", 5)), len(tasks)),
                             scheduled=len(tasks))
         # Fast path first: the site's own rate endpoint fetched in-page, one
-        # domain landing + N fetches, no per-hotel detail navigation. Falls
-        # back to the detail-page pool on any protection signal or template
-        # capture failure; hotels already collected keep their results.
-        # Opt-in via env: the preserved legacy test contract monkeypatches the
-        # detail-page pool directly and must keep that exact call path. pytest
-        # sets PYTEST_CURRENT_TEST; a real browser + real network calls must
-        # never run from unit tests.
-        in_pytest = bool(os.getenv("PYTEST_CURRENT_TEST"))
-        fast_path_enabled = (not in_pytest
-                             and os.getenv("TRIPCOM_RATE_FAST_FETCH", "1") == "1")
+        # domain landing + N fetches, no per-hotel detail navigation. The
+        # detail-page pool runs for hotels the fast path never reached
+        # (template capture failure, fast-path exception, not_started stubs);
+        # an explicit protection response (spider flag / HTTP 401/403/429/430)
+        # stops the source for this request instead of repeating it through
+        # detail pages. Hotels already collected keep their results.
+        # pytest sets PYTEST_CURRENT_TEST; a real browser + real network calls
+        # must never run from unit tests (see _tripcom_rate_fast_path_enabled).
+        fast_path_enabled = _tripcom_rate_fast_path_enabled()
         enriched: list[dict[str, Any]] = []
+        protected = False
         if fast_path_enabled:
             try:
                 enriched = await collect_tripcom_room_rates_via_fetch(
                     tasks, profile, concurrency=payload.get("concurrency", 5),
                     on_result=persist_completed_rate_result,
                 )
+                # The fast path answers one item per task and pads hotels it
+                # never reached with not_started stubs, so the fallback
+                # decision is made on statuses, not on the result length. A
+                # blocked item means the source answered with protection:
+                # retrying the same source through detail pages would hit the
+                # same protection and only burn the profile's quota.
+                protected = any(item.get("status") == "blocked"
+                                for item in enriched if isinstance(item, dict))
             except Exception as exc:
                 log.warning("[RATE_FETCH] in_page_fetch_failed error=%s detail=%s; falling back to detail pages",
                             type(exc).__name__, str(exc)[:300])
-                enriched = []
-        if not fast_path_enabled or len(enriched) != len(tasks):
-            # Sentinel or protection break: run the detail-page pool for the
-            # hotels the fast path did not reach. Merge results positionally
-            # by task order (the legacy pool contract returns one item per
-            # input hotel and its outcomes may omit source_hotel_id).
-            done_ids = {str(item.get("source_hotel_id") or "")
-                        for item in enriched if item and item.get("status") not in {"not_started"}}
-            remaining = [task for task in tasks
-                         if str(task.get("source_hotel_id") or "") not in done_ids]
+                # Restore outcomes the crashed run already persisted instead
+                # of dropping them; the fallback below then skips these
+                # hotels so they are not collected (and persisted) twice.
+                enriched = [persisted_outcomes.get(str(task["source_hotel_id"]))
+                            or {"status": "not_started"} for task in tasks]
+        if not fast_path_enabled:
+            remaining = list(tasks)
+        elif protected:
+            remaining = []
+            log.info("[RATE_FETCH] fallback_to_detail_pages skipped reason=protection")
+        else:
+            remaining = [task for index, task in enumerate(tasks)
+                         if index >= len(enriched)
+                         or not isinstance(enriched[index], dict)
+                         or str(enriched[index].get("status") or "") == "not_started"]
+        if remaining:
+            # Attempts are indexed by the full task order inside persistence;
+            # translate the subset-relative on_result index of the legacy pool
+            # back to the task index so a partial fallback cannot persist an
+            # outcome under the wrong hotel.
+            absolute_position = {str(task.get("source_hotel_id") or ""): index
+                                 for index, task in enumerate(tasks)}
+
+            async def persist_remaining_result(index: int, outcome: dict[str, Any]) -> None:
+                hotel_id = str(remaining[index].get("source_hotel_id") or "") if index < len(remaining) else ""
+                await persist_completed_rate_result(absolute_position.get(hotel_id, index), outcome)
+
             log.info("[RATE_FETCH] fallback_to_detail_pages remaining=%d", len(remaining))
-            if remaining:
-                detail_results = await collect_tripcom_room_rates(
-                    remaining, profile, concurrency=payload.get("concurrency", 5),
-                    on_result=persist_completed_rate_result,
-                )
-                # positional merge: map each remaining task to its outcome in order
-                merged = list(enriched)
-                if not merged:
-                    merged = [None] * len(tasks)
-                position = {str(task.get("source_hotel_id") or ""): i
-                            for i, task in enumerate(tasks)}
-                for task, item in zip(remaining, detail_results, strict=False):
-                    slot = position.get(str(task.get("source_hotel_id") or ""))
-                    if slot is not None:
-                        merged[slot] = item
-                enriched = [item if item is not None else {"status": "not_started"}
-                            for item in merged]
+            detail_results = await collect_tripcom_room_rates(
+                remaining, profile, concurrency=payload.get("concurrency", 5),
+                on_result=persist_remaining_result,
+            )
+            # Positional merge: the legacy pool contract returns one item per
+            # input hotel and its outcomes may omit source_hotel_id, so map
+            # each remaining task back to its slot in the task order.
+            merged: list[dict[str, Any] | None] = list(enriched)
+            if len(merged) < len(tasks):
+                merged.extend([None] * (len(tasks) - len(merged)))
+            for task, item in zip(remaining, detail_results, strict=False):
+                slot = absolute_position.get(str(task.get("source_hotel_id") or ""))
+                if slot is not None:
+                    merged[slot] = item
+            enriched = [item if item is not None else {"status": "not_started"}
+                        for item in merged]
         status_counts: dict[str, int] = {}
         for item in enriched:
             key = str(item.get("status") or "unknown")

@@ -1,7 +1,9 @@
 """Fetch Trip.com room-rate inventories via the site's own rate endpoint,
 issued in-page from a single domain landing page - no per-hotel detail
-navigation. Falls back to the detail-page pool when the endpoint is not
-usable (template capture fails, non-200, spider flag).
+navigation. A template capture failure returns the empty sentinel so the
+caller can fall back to the detail-page pool; an explicit protection
+response (spider flag / HTTP 401/403/429/430) instead stops the run and is
+reported per hotel instead of repeating it through detail pages.
 
 Verified live 2026-10-14: 10/10 real hotels returned full inventories
 (2-242 room groups each) at ~1-4s per hotel versus 15-20s per detail page,
@@ -95,10 +97,13 @@ async def collect_tripcom_room_rates_via_fetch(
     One persistent context, one domain landing page, sequential in-page POST
     fetches with a small inter-request delay. This replaces per-hotel detail
     navigation (15-20s each) with a ~1-4s fetch while using the identical
-    public endpoint and payload the detail page uses. On any protection
-    signal (non-200, spider flag, template capture failure) the function
-    returns a sentinel so the caller can fall back to the detail-page pool;
-    already-collected hotels keep their results.
+    public endpoint and payload the detail page uses. A template capture
+    failure returns the empty sentinel so the caller can fall back to the
+    detail-page pool; a protection signal (spider flag or HTTP
+    401/403/429/430) instead stops the run and the blocked hotel is reported
+    immediately. The result always carries one item per input hotel (hotels
+    never attempted are not_started); already-collected hotels keep their
+    results.
     """
     if not hotels:
         return []
@@ -161,8 +166,11 @@ async def collect_tripcom_room_rates_via_fetch(
                         except (TypeError, ValueError):
                             payload = None
                     if status in {401, 403, 429, 430} or spider is not None:
-                        # Protection signal: stop issuing further fetches; the
-                        # caller falls back for the remaining hotels.
+                        # Protection signal: stop issuing further fetches. The
+                        # blocked outcome is reported (and persisted) for this
+                        # hotel before the break; remaining hotels keep their
+                        # not_started stubs and the caller must not retry the
+                        # same source through detail pages.
                         import logging
                         logging.getLogger(__name__).warning(
                             "[RATE_FETCH] protection signal hotel=%s status=%s spider=%s "
@@ -171,12 +179,15 @@ async def collect_tripcom_room_rates_via_fetch(
                         results[index] = {
                             "source_hotel_id": hotel_id,
                             "status": "blocked",
+                            "rate_status": status,
                             "operation": "tripcom_detail_rate_inventory",
                             "error_type": "robots_or_provider_protection",
                             "error_message": "Protection response on the rate endpoint",
                             "attempt": 1, "retry_count": 0,
                             "latency_ms": round((time.perf_counter() - started) * 1000),
                         }
+                        if on_result is not None:
+                            await on_result(index, results[index])
                         break
                     diagnostics = {
                         "hotel_id": hotel_id,

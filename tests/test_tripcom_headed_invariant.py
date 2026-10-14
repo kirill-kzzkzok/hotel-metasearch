@@ -14,6 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TRIP_PATHS = [
     "aviasales_collector/hotels/sources/tripcom.py",
     "aviasales_collector/hotels/sources/tripcom_rates.py",
+    "aviasales_collector/hotels/sources/tripcom_rate_fetch.py",
     "aviasales_collector/tripcom_login.py",
 ]
 
