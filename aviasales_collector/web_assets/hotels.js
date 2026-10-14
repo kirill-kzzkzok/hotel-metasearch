@@ -473,7 +473,9 @@ function mapPopup(hotel, key) {
   }
   const beachDistanceValue = hotel.location?.distance_to_beach_km;
   const beachDistance = Number(beachDistanceValue);
-  if (hasDistance(beachDistanceValue)) {
+  const beachApplicable = hotel.location?.beach_relevant !== false
+    && hotel.location?.beach_status !== "not_applicable";
+  if (beachApplicable && hasDistance(beachDistanceValue)) {
     addText(facts, "map-popup-distance", `${formatDistance(beachDistance)} до пляжа`);
   }
   if (facts.childElementCount) popup.append(facts);
@@ -1563,7 +1565,11 @@ function render(data) {
     addText(context, "location-line", `📍 ${hasDistance(centerRaw) ? formatDistance(centerDistance) : "—"} до центра`);
     const beachRaw = hotel.location?.distance_to_beach_km;
     const beachDistance = Number(beachRaw);
-    addText(context, "beach-line", `🏖 ${hasDistance(beachRaw) ? formatDistance(beachDistance) : "—"} до пляжа`);
+    const beachApplicable = hotel.location?.beach_relevant !== false
+      && hotel.location?.beach_status !== "not_applicable";
+    if (beachApplicable) {
+      addText(context, "beach-line", `🏖 ${hasDistance(beachRaw) ? formatDistance(beachDistance) : "—"} до пляжа`);
+    }
     const metroValue = hotel.location?.distance_to_metro_km;
     const metroDistance = Number(metroValue);
     if (metroValue !== null && metroValue !== undefined && Number.isFinite(metroDistance) && metroDistance >= 0) {
