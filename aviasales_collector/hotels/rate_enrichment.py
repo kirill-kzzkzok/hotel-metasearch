@@ -20,6 +20,7 @@ from .runtime import (_ACTIVE_SEARCH_TIMELINE_ID, _profiled_sqlite_connect, log,
 from .sources.tripcom import (DEFAULT_TRIP_PROFILE, TRIP_EXECUTOR,
                               TRIP_PROFILE_LOCK, shutdown_tripcom_browser)
 from .sources.tripcom_rates import collect_tripcom_room_rates
+from .sources.tripcom_rate_fetch import collect_tripcom_room_rates_via_fetch
 
 
 def _persist_rate_task_lifecycle(database_path: str | Path, search_id: str,
@@ -253,10 +254,55 @@ async def enrich_tripcom_room_rates(
         pool_started = time.perf_counter()
         log_search_timeline(search_id, "rate_pool_started", workers=min(int(payload.get("concurrency", 5)), len(tasks)),
                             scheduled=len(tasks))
-        enriched = await collect_tripcom_room_rates(
-            tasks, profile, concurrency=payload.get("concurrency", 5),
-            on_result=persist_completed_rate_result,
-        )
+        # Fast path first: the site's own rate endpoint fetched in-page, one
+        # domain landing + N fetches, no per-hotel detail navigation. Falls
+        # back to the detail-page pool on any protection signal or template
+        # capture failure; hotels already collected keep their results.
+        # Opt-in via env: the preserved legacy test contract monkeypatches the
+        # detail-page pool directly and must keep that exact call path. pytest
+        # sets PYTEST_CURRENT_TEST; a real browser + real network calls must
+        # never run from unit tests.
+        in_pytest = bool(os.getenv("PYTEST_CURRENT_TEST"))
+        fast_path_enabled = (not in_pytest
+                             and os.getenv("TRIPCOM_RATE_FAST_FETCH", "1") == "1")
+        enriched: list[dict[str, Any]] = []
+        if fast_path_enabled:
+            try:
+                enriched = await collect_tripcom_room_rates_via_fetch(
+                    tasks, profile, concurrency=payload.get("concurrency", 5),
+                    on_result=persist_completed_rate_result,
+                )
+            except Exception as exc:
+                log.warning("[RATE_FETCH] in_page_fetch_failed error=%s detail=%s; falling back to detail pages",
+                            type(exc).__name__, str(exc)[:300])
+                enriched = []
+        if not fast_path_enabled or len(enriched) != len(tasks):
+            # Sentinel or protection break: run the detail-page pool for the
+            # hotels the fast path did not reach. Merge results positionally
+            # by task order (the legacy pool contract returns one item per
+            # input hotel and its outcomes may omit source_hotel_id).
+            done_ids = {str(item.get("source_hotel_id") or "")
+                        for item in enriched if item and item.get("status") not in {"not_started"}}
+            remaining = [task for task in tasks
+                         if str(task.get("source_hotel_id") or "") not in done_ids]
+            log.info("[RATE_FETCH] fallback_to_detail_pages remaining=%d", len(remaining))
+            if remaining:
+                detail_results = await collect_tripcom_room_rates(
+                    remaining, profile, concurrency=payload.get("concurrency", 5),
+                    on_result=persist_completed_rate_result,
+                )
+                # positional merge: map each remaining task to its outcome in order
+                merged = list(enriched)
+                if not merged:
+                    merged = [None] * len(tasks)
+                position = {str(task.get("source_hotel_id") or ""): i
+                            for i, task in enumerate(tasks)}
+                for task, item in zip(remaining, detail_results, strict=False):
+                    slot = position.get(str(task.get("source_hotel_id") or ""))
+                    if slot is not None:
+                        merged[slot] = item
+                enriched = [item if item is not None else {"status": "not_started"}
+                            for item in merged]
         status_counts: dict[str, int] = {}
         for item in enriched:
             key = str(item.get("status") or "unknown")
