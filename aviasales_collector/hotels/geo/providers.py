@@ -293,6 +293,29 @@ def _geocode_identity_tokens(value: str | None, *location_values: str | None) ->
             tokens.discard(compact)
     return tokens - GEOCODE_PROPERTY_GENERIC
 
+def _geocode_levenhtein_distance_1(a: str, b: str) -> bool:
+    """True when two single tokens differ by at most one edit (insert,
+    delete, substitute - including a transposition's two substitutions is
+    NOT covered, so check transposition explicitly)."""
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        diffs = [i for i, (x, y) in enumerate(zip(a, b)) if x != y]
+        if len(diffs) == 1:
+            return True
+        if (len(diffs) == 2 and diffs[1] == diffs[0] + 1
+                and a[diffs[0]] == b[diffs[1]] and a[diffs[1]] == b[diffs[0]]):
+            return True  # transposition: cusco/cuzco
+        return False
+    shorter, longer = (a, b) if len(a) < len(b) else (b, a)
+    for i in range(len(longer)):
+        if shorter == longer[:i] + longer[i + 1:]:
+            return True
+    return False
+
+
 def _geocode_names_match(source_name: str, candidate_name: str | None,
                          city: str, country: str | None) -> bool:
     source = _geocode_identity_tokens(source_name, city, country)
@@ -304,7 +327,21 @@ def _geocode_names_match(source_name: str, candidate_name: str | None,
     shared = source & candidate
     # A single shared token can identify a neighboring property with a similar
     # brand/name, so fuzzy matches need at least two independent name tokens.
-    return len(shared) >= 2 and len(shared) / max(len(source), len(candidate)) >= 0.75
+    if len(shared) >= 2 and len(shared) / max(len(source), len(candidate)) >= 0.75:
+        return True
+    # 2026-10-15 Cusco live defect: the geocoder's place-level candidate used
+    # the local spelling ('Cuzco') while the requested city was 'Cusco' - a
+    # single-token transposition. The exact-match requirement made the real
+    # city unmatchable, and the next candidate (the STATE boundary, same
+    # spelling as the query) was accepted instead, putting the 'city center'
+    # 125 km away. Allow one edit (substitution/insert/delete/transposition)
+    # between single-token names so local spellings still resolve to the city.
+    if len(source) == 1 and len(candidate) == 1:
+        source_token = next(iter(source))
+        candidate_token = next(iter(candidate))
+        if len(source_token) >= 4 and len(candidate_token) >= 4:
+            return _geocode_levenhtein_distance_1(source_token, candidate_token)
+    return False
 
 def _address_number_tokens(value: str | None) -> set[str]:
     tokens = normalize_hotel_name(value).split()
