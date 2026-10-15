@@ -1321,6 +1321,18 @@ def _tripcom_card_to_raw(card: Any) -> dict[str, Any] | None:
     if not name or not hotel_id:
         return None
     rating_match = re.search(r"\b(\d{1,2}(?:[.,]\d+)?)\s*/\s*10\b", text)
+    if rating_match is None:
+        # 2026-10-15 live layout: the score renders as a bare "9,5" line next
+        # to the review count ("326 отзыва"), without the "/10" suffix. Accept
+        # a standalone 0-10 score only from such a line so prices and review
+        # counts cannot be mistaken for a rating.
+        for index, line in enumerate(lines):
+            if not re.fullmatch(r"\d(?:[.,]\d)?\s*", line.strip()):
+                continue
+            neighbors = lines[max(0, index - 2):index + 3]
+            if any(re.search(r"отзыв|review", neighbor, re.I) for neighbor in neighbors):
+                rating_match = re.match(r"(\d{1,2}(?:[.,]\d+)?)", line.strip())
+                break
     reviews_match = re.search(r"([\d\s,]+)\s*(?:reviews?|отзыв(?:а|ов)?)", text, re.I)
     stars = _tripcom_card_stars(card)
     images = card.locator("img").evaluate_all("""
@@ -1414,6 +1426,18 @@ def _tripcom_card_snapshot_to_raw(snapshot: dict[str, Any]) -> dict[str, Any] | 
         return None
 
     rating_match = re.search(r"\b(\d{1,2}(?:[.,]\d+)?)\s*/\s*10\b", text)
+    if rating_match is None:
+        # 2026-10-15 live layout: the score renders as a bare "9,5" line next
+        # to the review count ("326 отзыва"), without the "/10" suffix. Accept
+        # a standalone 0-10 score only from such a line so prices and review
+        # counts cannot be mistaken for a rating.
+        for index, line in enumerate(lines):
+            if not re.fullmatch(r"\d(?:[.,]\d)?\s*", line.strip()):
+                continue
+            neighbors = lines[max(0, index - 2):index + 3]
+            if any(re.search(r"отзыв|review", neighbor, re.I) for neighbor in neighbors):
+                rating_match = re.match(r"(\d{1,2}(?:[.,]\d+)?)", line.strip())
+                break
     reviews_match = re.search(r"([\d\s,]+)\s*(?:reviews?|отзыв(?:а|ов)?)", text, re.I)
     reviews_digits = re.sub(r"\D", "", reviews_match.group(1)) if reviews_match else ""
     stars = None
