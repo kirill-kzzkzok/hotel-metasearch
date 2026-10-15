@@ -538,6 +538,13 @@ def merge_auto_matched_hotels(hotels: list[dict[str, Any]]) -> list[dict[str, An
         known_stars = {round(float(record["stars"]), 1) for record in source_records
                        if isinstance(record.get("stars"), (int, float))
                        and not isinstance(record.get("stars"), bool)}
+        # 2026-10-15 live defect: Sravni sends stars=0 for hotels it has no
+        # star classification for (an unknown sentinel, not a real rating of
+        # zero stars). A 0 must not conflict with a real Trip.com value and
+        # produce a permanent dash on the card; drop it before the uniqueness
+        # check so the remaining classification wins.
+        known_stars.discard(0)
+        known_stars.discard(0.0)
         # Do not silently choose one source when verified star classifications
         # disagree. Keep the source evidence above and leave the canonical value unknown.
         base["stars"] = next(iter(known_stars)) if len(known_stars) == 1 else None

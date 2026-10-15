@@ -312,6 +312,21 @@ _AMENITY_PATTERNS = {
     "air_conditioning": (r"air\s*condition", r"кондиционер"),
     "spa": (r"\bspa\b", r"спа"),
     "fitness": (r"fitness", r"gym", r"фитнес", r"тренажер"),
+    "restaurant": (r"restaurant", r"ресторан"),
+    "breakfast": (r"breakfast", r"завтрак"),
+    "elevator": (r"elevator", r"лифт"),
+    "laundry": (r"laundry", r"прачеч"),
+    "pets": (r"pets", r"животн"),
+    "kitchen": (r"kitchen", r"кухн", r"готов[^;]{0,14}еды"),
+    "heating": (r"heating", r"отоплен"),
+    "luggage": (r"luggage", r"багаж"),
+    "terrace": (r"terrace", r"террас", r"смотровая площадк"),
+    "balcony": (r"balcony", r"балкон"),
+    "refrigerator": (r"refrigerator", r"fridge", r"холодильник"),
+    "television": (r"television", r"\btv\b", r"телевизор"),
+    "shuttle": (r"shuttle", r"трансфер"),
+    "sauna": (r"sauna", r"саун"),
+    "seaside": (r"sea view", r"вид на море", r"первая линия"),
 }
 
 def extract_amenities(item: dict[str, Any]) -> list[str]:

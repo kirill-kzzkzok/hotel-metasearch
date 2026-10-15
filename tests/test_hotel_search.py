@@ -76,6 +76,11 @@ _MIGRATED_TESTS = {
     # (around:8000, airports/landmarks) - so a cold lookup issues two
     # requests while keeping the tile cache reuse assertion intact.
     "test_osm_nearby_places_use_nearest_features_and_tile_cache",
+    # 2026-10-15 user directive: the landmark line must not show the data
+    # provider suffix ('по данным СравниОтель') and instead appends walking
+    # minutes for short distances. The archived assertion checked the old
+    # provider suffix; the readable replacement below pins the new contract.
+    "test_provider_metadata_is_folded_into_the_canonical_card_not_a_second_panel",
 }
 globals().update({
     name: value for name, value in vars(_legacy).items()
@@ -415,3 +420,31 @@ def test_osm_nearby_places_use_nearest_features_and_tile_cache(tmp_path, monkeyp
     # Tile cache reuse: the second read must not issue new requests.
     assert second["places"]["metro"]["name"] == "Closest Metro"
     assert len(calls) == 2
+
+
+def test_provider_metadata_is_folded_into_the_canonical_card_not_a_second_panel():
+    """Readable replacement for the archived provider-suffix version.
+
+    2026-10-15 user directive: landmark/geo lines must not carry the
+    '· по данным <provider>' suffix, and short distances show walking
+    minutes instead. The provider panel structure itself stays folded
+    into the canonical card (hotelAmenities / hotelPolicy consumers).
+    """
+    from pathlib import Path as _Path
+    js = (_Path(__file__).resolve().parents[1]
+          / "aviasales_collector" / "web_assets" / "hotels.js").read_text(encoding="utf-8")
+    css = (_Path(__file__).resolve().parents[1]
+           / "aviasales_collector" / "web_assets" / "hotels.css").read_text(encoding="utf-8")
+    # provider metadata is consumed by the card, not a separate panel
+    assert "hotel.provider_details" in js
+    assert "detail?.hotel_amenities" in js
+    assert "hotelPolicy(hotel)" in js
+    assert "provider-hotel-details" in css
+    # geo lines use the distance fields
+    assert "distance_to_metro_km" in js
+    assert "distance_to_airport_km" in js
+    assert "distance_to_osm_landmark_km" in js
+    # the provider suffix is gone (2026-10-15 directive)
+    assert "по данным" not in js
+    # walking minutes are appended for short distances
+    assert "walkingMinutes" in js

@@ -302,6 +302,9 @@ function hotelReadyForRender(data, hotel) {
       || !coordinatesProcessed(data, hotel)) return false;
   // A card is ready only after geo enrichment and each Trip.com rate task has
   // reached a terminal result, including honest unknown/unavailable outcomes.
+  // 2026-10-15 user directive: cards must render COMPLETE (geo, metro, center
+  // distances present), never half-empty - the speed fix belongs to the
+  // enrichment pipeline, not to weakening this gate.
   return hotelSourceRecords(hotel).every((record) => record.source !== "trip_com"
     || TERMINAL_TRIPCOM_ENRICHMENT.has(String(tripcomRecordStatus(hotel, record) || "").toLowerCase()));
 }
@@ -1028,6 +1031,8 @@ const AMENITY_LABELS = {
   air_conditioning: "Кондиционер", reception_24h: "Ресепшен 24/7", beach: "Пляж",
   restaurant: "Ресторан", breakfast: "Завтрак", elevator: "Лифт", shuttle: "Трансфер",
   sauna: "Сауна", laundry: "Прачечная", balcony: "Балкон", refrigerator: "Холодильник", television: "Телевизор",
+  pets: "Можно с животными", kitchen: "Кухня", heating: "Отопление", luggage: "Хранение багажа",
+  terrace: "Терраса", seaside: "Вид на море",
 };
 const CORE_AMENITY_FILTERS = ["wifi", "pool", "spa", "parking", "gym", "air_conditioning", "reception_24h"];
 const SUPPORTED_AMENITY_FILTERS = Object.keys(AMENITY_LABELS);
@@ -1057,6 +1062,12 @@ function amenityKey(value) {
   if (/balcony|балкон/.test(text)) return "balcony";
   if (/refrigerator|fridge|холодильник/.test(text)) return "refrigerator";
   if (/television|\btv\b|телевизор/.test(text)) return "television";
+  if (/pets|животн/.test(text)) return "pets";
+  if (/kitchen|кухн|готов.{0,12}еды/.test(text)) return "kitchen";
+  if (/heating|отоплен/.test(text)) return "heating";
+  if (/luggage|багаж/.test(text)) return "luggage";
+  if (/terrace|террас|смотровая площадк/.test(text)) return "terrace";
+  if (/seaside|first line|первая линия|вид на море|sea view/.test(text)) return "seaside";
   return null;
 }
 function hotelAmenities(hotel) {
@@ -1579,7 +1590,7 @@ function render(data) {
     const metroValue = hotel.location?.distance_to_metro_km;
     const metroDistance = Number(metroValue);
     if (metroValue !== null && metroValue !== undefined && Number.isFinite(metroDistance) && metroDistance >= 0) {
-      addText(context, "geo-distance-line", `🚇 ${formatDistance(metroDistance)} до метро`);
+      addText(context, "geo-distance-line", `🚇 ${formatDistance(metroDistance)} до метро` + walkingMinutes(metroDistance));
     }
     const airportValue = hotel.location?.distance_to_airport_km;
     const airportDistance = Number(airportValue);
@@ -1590,9 +1601,9 @@ function render(data) {
       && hotel.location?.landmark_name) {
       const icon = hotel.location.landmark_type === "beach" ? "🏖 "
         : ["metro", "subway", "station"].includes(hotel.location.landmark_type) ? "🚇 " : "📍 ";
-      const source = sourceLabels[hotel.location.landmark_source] || hotel.location.landmark_source;
-      addText(context, "landmark-line", `${icon}${formatDistance(hotel.location.distance_to_landmark_km)} до ${hotel.location.landmark_name}`
-        + (source ? ` · по данным ${source}` : ""));
+      addText(context, "landmark-line",
+        `${icon}${formatDistance(hotel.location.distance_to_landmark_km)} до ${hotel.location.landmark_name}`
+        + walkingMinutes(hotel.location.distance_to_landmark_km));
     }
     const osmLandmarkValue = hotel.location?.distance_to_osm_landmark_km;
     if (osmLandmarkValue !== null && osmLandmarkValue !== undefined
@@ -1650,8 +1661,14 @@ function render(data) {
     if (context.childElementCount) main.append(context);
     const title = document.createElement("h2"); title.className = "hotel-title"; title.textContent = hotel.name;
     const starCount = Math.max(0, Math.min(5, Math.round(Number(hotel.stars) || 0)));
-    const titleStars = document.createElement("span"); titleStars.className = "title-stars"; titleStars.textContent = starCount ? ` ${"★".repeat(starCount)}` : " —";
-    title.append(titleStars);
+    // 2026-10-15 user directive: no dash after the hotel name. Hotels without
+    // a star classification (guest houses, apartments, unclassified) show no
+    // star marker at all instead of a misleading '—' placeholder.
+    if (starCount) {
+      const titleStars = document.createElement("span"); titleStars.className = "title-stars";
+      titleStars.textContent = ` ${"★".repeat(starCount)}`;
+      title.append(titleStars);
+    }
     main.prepend(title);
     card.append(main);
     const offerPanel = document.createElement("div"); offerPanel.className = "offer-panel";
@@ -1834,6 +1851,14 @@ function formatDistance(km) {
   const value = Number(km);
   if (!Number.isFinite(value) || value < 0) return "расстояние неизвестно";
   return value < 1 ? `${Math.round(value * 1000)} м` : `${value.toLocaleString("ru-RU", {maximumFractionDigits: 1})} км`;
+}
+// Walking time at a calm pace (~4.5 km/h); shown for short reachable
+// distances only - beyond 2 km a walk estimate stops being useful.
+function walkingMinutes(km) {
+  const value = Number(km);
+  if (!Number.isFinite(value) || value < 0 || value > 2) return "";
+  const minutes = Math.max(1, Math.round(value * 60 / 4.5));
+  return ` (${minutes} ${plural(minutes, "минута", "минуты", "минут")} пешком)`;
 }
 function hasDistance(value) {
   return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value)) && Number(value) >= 0;
