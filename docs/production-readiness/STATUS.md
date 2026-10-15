@@ -386,3 +386,25 @@ Overpass лежал весь вечер (ReadTimeout/504) — метро-обо�
   читаемым стейджированным контрактом (2 запроса + кэш-переиспользование).
 - Коммиты фазы 12 итог: `62669d1`, `162fdc0`, `6b03598`, `0ed8fdf`, `e3c2722`,
   `3fae189`, `feb8b31`, `6a940c2` (+ D19 ниже).
+
+## Фаза 12 доп: Дубай card_parse закрыт (2026-10-15, `f22f28d`)
+
+- **Дефект:** Дубай-смоук — trip_com `parse_error error_class=card_parse`
+  (HTTP 200, reported_total=5328, 40 карточек пропущены). Пробники (живой
+  браузер): A/B-вариант выдачи Трипкома — карточки `.list-item` БЕЗ единой
+  `a[href]`, единственный id — `data-offline-hotelid` внутреннего
+  `div.hotel-card-versionb`; снапшот-скрипт читал только `card.id` корня
+  (пуст) → все карточки отбрасывались.
+- **Фикс:** снапшот-скрипт — fallback
+  `querySelector('[data-offline-hotelid]')`; id валидируется существующим
+  `isdigit()`-путём; карточки без id честно отбрасываются. Живая проверка:
+  тот же запрос Дубая → отели парсятся, `captured_idless=0`, статус
+  `partial` (остаток `inventory_response_empty` — внешний флапинг
+  пагинации выдачи, честно фиксируется).
+- Регресс: `tests/test_tripcom_card_offline_hotelid.py` (3 теста:
+  fallback, drop, legacy-link preference), `189 passed` в
+  test_hotel_search.py + headed_invariant.
+- Дополнительно закрыто живьём (Дополнение §5): повторный enrich на
+  Лондон-сессии (100 ok/53 queued) — 12 queued → 12 ok за 70.6с, 485 новых
+  наблюдений, **0 дублей** (distinct=total 3940), терминальные ok не
+  тронуты. Полный цикл replan без дублирования подтверждён.
