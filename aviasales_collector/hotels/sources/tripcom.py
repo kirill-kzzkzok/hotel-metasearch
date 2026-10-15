@@ -1339,7 +1339,12 @@ def _tripcom_card_to_raw(card: Any) -> dict[str, Any] | None:
     location_prefix = re.sub(r"центр города|посмотреть на карте", "", location_prefix, flags=re.I).strip(" ,–-\t")
     district_match = re.search(r"Рядом:\s*([^\"“«\n]+)", text, re.I)
     review_quotes = _tripcom_card_review_quotes(text)
-    money = re.findall(r"(?<!\d)(\d[\d\u00a0\u202f ,]*(?:[.,]\d{1,2})?)\s*(₽|RUB)", text, re.I)
+    # 2026-10-15 live defect: loyalty bonus lines («Получите 179,22 ₽ в виде Trip Coins»)
+    # appear AFTER the real price lines, so money[-1] picked the bonus as the offer
+    # price and cards showed 10-179 RUB instead of the real rate. Search for the
+    # price only in text with those bonus lines removed.
+    price_text = re.sub(r"получите?[^\n]{0,80}₽\s*(?:в виде )?trip coins|получите?[ \S]{0,40}trip coins[^\n]{0,40}", " ", text, flags=re.I)
+    money = re.findall(r"(?<!\d)(\d[\d\u00a0\u202f ,]*(?:[.,]\d{1,2})?)\s*(₽|RUB)", price_text, re.I)
     offers = []
     if money:
         amount_text = money[-1][0].replace("\u00a0", "").replace("\u202f", "").replace(" ", "").replace(",", ".")
@@ -1431,7 +1436,12 @@ def _tripcom_card_snapshot_to_raw(snapshot: dict[str, Any]) -> dict[str, Any] | 
     location_prefix = re.sub(r"центр города|посмотреть на карте", "", location_prefix, flags=re.I).strip(" ,–-\t")
     district_match = re.search(r"Рядом:\s*([^\"“«\n]+)", text, re.I)
     review_quotes = _tripcom_card_review_quotes(text)
-    money = re.findall(r"(?<!\d)(\d[\d\u00a0\u202f ,]*(?:[.,]\d{1,2})?)\s*(₽|RUB)", text, re.I)
+    # 2026-10-15 live defect: loyalty bonus lines («Получите 179,22 ₽ в виде Trip Coins»)
+    # appear AFTER the real price lines, so money[-1] picked the bonus as the offer
+    # price and cards showed 10-179 RUB instead of the real rate. Search for the
+    # price only in text with those bonus lines removed.
+    price_text = re.sub(r"получите?[^\n]{0,80}₽\s*(?:в виде )?trip coins|получите?[ \S]{0,40}trip coins[^\n]{0,40}", " ", text, flags=re.I)
+    money = re.findall(r"(?<!\d)(\d[\d\u00a0\u202f ,]*(?:[.,]\d{1,2})?)\s*(₽|RUB)", price_text, re.I)
     offers = []
     if money:
         amount_text = money[-1][0].replace("\u00a0", "").replace("\u202f", "").replace(" ", "").replace(",", ".")
