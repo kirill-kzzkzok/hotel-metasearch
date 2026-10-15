@@ -378,9 +378,18 @@ def build_router(database_path: str | Path) -> APIRouter:
                         "canonical_ids_json": json.dumps(canonical_ids, ensure_ascii=False, separators=(",", ":")),
                     }
                     log_search_timeline(search_id, "geo_batch_started", **batch_details, total=total)
+                    # 2026-10-15 first-card latency (user directive: first cards
+                    # within seconds, but COMPLETE). Phase 1 resolves coordinates
+                    # + center distance only (fast provider lookups); the batch
+                    # is yielded immediately. Phase 2 below runs the full geo
+                    # stages (beach/metro Overpass) and re-yields the same
+                    # hotels as an update, so cards gain metro/beach lines the
+                    # moment they arrive - the render-signature cache re-renders
+                    # just those cards.
                     try:
                         await _enrich_search_coordinates(
                             database_path, stream_result, limit=stop - start, offset=start,
+                            coordinate_only=True,
                         )
                     except Exception as exc:
                         log.exception("[ENRICH] coordinate batch failed offset=%d", start)
@@ -412,6 +421,23 @@ def build_router(database_path: str | Path) -> APIRouter:
                         bytes=len(line.encode("utf-8")),
                     )
                     yield line
+                    # Phase 2 (update pass): full geo stages for the same
+                    # batch - beach/metro/airport distances that depend on
+                    # Overpass. Frontend's render-signature cache re-renders
+                    # only the cards whose fields changed.
+                    try:
+                        await _enrich_search_coordinates(
+                            database_path, stream_result, limit=stop - start, offset=start,
+                        )
+                    except Exception:
+                        log.exception("[ENRICH] geo update pass failed offset=%d", start)
+                    update_line = json.dumps({
+                        "hotels": hotels_for_stream[start:stop], "offset": start,
+                        "complete": stop >= end, "total": total, "result_total": result_total,
+                        "batch_id": f"{batch_id}:geo",
+                        "unresolved_hotel_keys": [],
+                    }, ensure_ascii=False, default=str) + "\n"
+                    yield update_line
                 if offset >= end:
                     yield json.dumps({"hotels": [], "offset": offset,
                                       "complete": True, "total": total, "result_total": result_total,

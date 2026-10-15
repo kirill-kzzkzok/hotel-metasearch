@@ -71,7 +71,7 @@ def _geo_enrichment_cache_is_terminal(hotel: dict[str, Any]) -> bool:
     return timedelta(0) <= age < ttl
 
 async def _enrich_search_coordinates(path: str | Path, result: dict[str, Any], limit: int | None = None,
-                                     offset: int = 0) -> None:
+                                     offset: int = 0, *, coordinate_only: bool = False) -> None:
     batch_started = time.perf_counter()
     query = result.get("query", {})
     search_id = str(result.get("search_id") or "")
@@ -293,6 +293,14 @@ async def _enrich_search_coordinates(path: str | Path, result: dict[str, Any], l
                     if profile:
                         profile.add_stage(stage, (time.perf_counter() - started) * 1000)
 
+            # 2026-10-15 first-card latency: phase 1 (coordinate_only) resolves
+            # coordinates and center distance then returns; the stream yields
+            # the batch immediately and re-runs the full geo stages as an
+            # update pass, so the first complete cards do not wait for cold
+            # Overpass deadlines (up to 12s per hotel).
+            if coordinate_only:
+                hotel["location"] = location
+                return  # phase 2 (beach/nearby Overpass) runs as an update pass
             # Beach geometry and generic POIs are independent once the hotel
             # coordinate is known. Fetch both concurrently; each keeps its own
             # spatial cache and source evidence.
