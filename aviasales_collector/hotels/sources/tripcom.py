@@ -1077,7 +1077,8 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                     nonlocal current_stage
                     current_stage = "parser"
                     snapshots = cards.evaluate_all("""els => els.map(card => ({
-                      id: card.id || null,
+                      id: card.id || card.querySelector('[data-offline-hotelid]')?.getAttribute('data-offline-hotelid')
+                          || null,
                       text: card.innerText || '',
                       name: card.querySelector('h2, h3, [class*=hotelName], [class*=hotel-name]')?.innerText || '',
                       links: Array.from(card.querySelectorAll('a[href]')).map(a => ({href: a.href,
