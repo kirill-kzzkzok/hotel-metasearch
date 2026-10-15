@@ -1503,8 +1503,8 @@ def _tripcom_reported_total(body: str) -> int | None:
 def _tripcom_explicit_empty_results(body: str) -> bool:
     return bool(re.search(
         r"(?:no\s+(?:hotels?|properties|results|availability|rooms?)\b|"
-        r"(?:не найдено|нет)\s+(?:отел\w*|вариант\w*|доступн\w*|номеров\b)|"
-        r"подходящ\w*\s+вариант\w*\s+не\s+найден\w*)",
+        r"(?:не найдено|нет|не нашли)\s+(?:отел\w*|вариант\w*|доступн\w*|номеров\b|объект\w*)|"
+        r"подходящ\w*\s+(?:вариант\w*|объект\w*|отели?)\s+не\s+найден\w*|найдено\s+0\s+объект\w*|не нашли подходящ\w*)",
         body, re.I,
     ))
 
