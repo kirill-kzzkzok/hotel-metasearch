@@ -865,6 +865,164 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                     audit_inventory_request(request, failed=True), finish_provider_request(request)
                 ))
 
+                # 2026-10-15: the list page's own fetchHotelList XHR carries
+                # structured per-hotel facts (positionInfo.mapCoordinate,
+                # hotelStar.star, commentInfo) that the A/B card DOM does not
+                # render. Capture them so the card parser can merge coordinates,
+                # stars, ratings and review counts without any detail-page
+                # navigation (scroll-only collection directive).
+                inventory_hotel_facts: dict[str, dict[str, Any]] = {}
+
+                def capture_inventory_facts(response: Any) -> None:
+                    if not urlparse(response.url).path.endswith("/fetchHotelList"):
+                        return
+                    if response.status != 200:
+                        return
+                    try:
+                        payload = response.json()
+                    except Exception:
+                        return
+                    data = payload.get("data") if isinstance(payload, dict) else None
+                    hotel_list = data.get("hotelList") if isinstance(data, dict) else None
+                    if not isinstance(hotel_list, list):
+                        return
+                    for item in hotel_list:
+                        if not isinstance(item, dict):
+                            continue
+                        hotel_info = item.get("hotelInfo")
+                        if not isinstance(hotel_info, dict):
+                            continue
+                        hotel_id = None
+                        summary = hotel_info.get("summary")
+                        if isinstance(summary, dict) and str(
+                                summary.get("hotelId") or "").isdigit():
+                            hotel_id = str(summary["hotelId"])
+                        if hotel_id is None:
+                            continue
+                        facts: dict[str, Any] = {}
+                        position = hotel_info.get("positionInfo")
+                        if isinstance(position, dict):
+                            coordinates = position.get("mapCoordinate")
+                            if isinstance(coordinates, list):
+                                for entry in coordinates:
+                                    if not isinstance(entry, dict):
+                                        continue
+                                    try:
+                                        lat = float(entry.get("latitude"))
+                                        lng = float(entry.get("longitude"))
+                                    except (TypeError, ValueError):
+                                        continue
+                                    if -90 <= lat <= 90 and -180 <= lng <= 180:
+                                        facts["coordinates"] = {"lat": lat, "lng": lng}
+                                        break
+                        star_info = hotel_info.get("hotelStar")
+                        if isinstance(star_info, dict):
+                            star = star_info.get("star")
+                            if isinstance(star, int) and 1 <= star <= 5:
+                                                facts["stars"] = star
+                        highlights = hotel_info.get("highlightsModule")
+                        if isinstance(highlights, dict):
+                            items = highlights.get("highlightsItemList")
+                            if isinstance(items, list):
+                                titles = [str(entry["title"]).strip()
+                                          for entry in items
+                                          if isinstance(entry, dict)
+                                          and isinstance(entry.get("title"), str)
+                                          and entry["title"].strip()]
+                                titles = titles[:12]
+                                if titles:
+                                    facts["amenities"] = titles
+                        comment_info = hotel_info.get("commentInfo")
+                        if isinstance(comment_info, dict):
+                            score_text = str(comment_info.get("commentScore") or "")
+                            try:
+                                score = float(score_text.replace(",", "."))
+                            except ValueError:
+                                score = None
+                            if score is not None and 0 < score <= 10:
+                                facts["rating"] = score
+                            reviews_text = str(comment_info.get("commenterNumber") or "")
+                            digits = re.sub(r"\D", "", reviews_text)
+                            if digits:
+                                facts["reviews_count"] = int(digits)
+                        if facts:
+                            inventory_hotel_facts[hotel_id] = facts
+
+                page.on("response", capture_inventory_facts)
+
+                def extract_ssr_inventory_facts() -> int:
+                    """Parse server-rendered hotel facts from __next_f flight data.
+
+                    Page 1 of the results list is server-side rendered: its
+                    fetchHotelList payload is embedded in the Next.js flight
+                    scripts (mapCoordinate / hotelStar / commentInfo), so the
+                    response listener above never fires for it. This parser
+                    decodes the same facts straight from the flight text.
+                    """
+                    try:
+                        flight = page.evaluate(
+                            "() => {let out = '';"
+                            "for (const s of document.querySelectorAll('script')) {"
+                            "  const t = s.textContent || '';"
+                            "  if (t.includes('__next_f.push')) out += t;"
+                            "}"
+                            "return out;}"
+                        )
+                    except Exception:
+                        return 0
+                    if not isinstance(flight, str) or "mapCoordinate" not in flight:
+                        return 0
+                    # Flight chunks escape quotes with varying backslash runs;
+                    # matching non-word separators is robust across builds.
+                    added = 0
+                    pattern_hotel = re.compile(r"hotelId\W{0,8}(\d+)")
+                    pattern_lat = re.compile(
+                        r"latitude\W{0,8}(-?\d{1,2}\.\d+)\W{0,12}longitude\W{0,8}(-?\d{1,3}\.\d+)",
+                        re.S)
+                    pattern_star = re.compile(r"hotelStar\W{0,6}star\W{0,4}(\d)")
+                    pattern_score = re.compile(r"commentScore\W{0,8}([\d,]+)")
+                    pattern_reviews = re.compile(r"commenterNumber\W{0,8}(\d+)")
+                    # Split the flight text into per-hotel chunks by hotelId
+                    # boundaries so facts can be attributed correctly.
+                    boundaries = [(m.start(), m.group(1))
+                                  for m in pattern_hotel.finditer(flight)]
+                    boundaries.append((len(flight), None))
+                    for (start, hotel_id), (end, _next) in zip(boundaries, boundaries[1:]):
+                        if hotel_id is None:
+                            continue
+                        chunk = flight[start:end]
+                        facts: dict[str, Any] = {}
+                        lat_match = pattern_lat.search(chunk)
+                        if lat_match:
+                            try:
+                                lat, lng = float(lat_match.group(1)), float(lat_match.group(2))
+                                if -90 <= lat <= 90 and -180 <= lng <= 180:
+                                    facts["coordinates"] = {"lat": lat, "lng": lng}
+                            except ValueError:
+                                pass
+                        star_match = pattern_star.search(chunk)
+                        if star_match:
+                            star = int(star_match.group(1))
+                            if 1 <= star <= 5:
+                                facts["stars"] = star
+                        score_match = pattern_score.search(chunk)
+                        if score_match:
+                            try:
+                                score = float(score_match.group(1).replace(",", "."))
+                                if 0 < score <= 10:
+                                    facts["rating"] = score
+                            except ValueError:
+                                pass
+                        reviews_match = pattern_reviews.search(chunk)
+                        if reviews_match:
+                            facts["reviews_count"] = int(reviews_match.group(1))
+                        if facts:
+                            existing = inventory_hotel_facts.setdefault(hotel_id, {})
+                            for key, value in facts.items():
+                                existing.setdefault(key, value)
+                            added += 1
+                    return added
+
                 def capture_autocomplete(response: Any) -> None:
                     if urlparse(response.url).path != TRIP_AUTOCOMPLETE_PATH:
                         return
@@ -1043,6 +1201,15 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                                         latency_ms=int((time.perf_counter() - started) * 1000),
                                         error_class="search_context_mismatch",
                                         reason="Trip.com page did not confirm the requested dates and occupancy")
+                # First page is server-rendered: mine its hotel facts from the
+                # flight data before the card parser runs (the fetchHotelList
+                # listener only fires for scrolled pages).
+                try:
+                    ssr_facts = extract_ssr_inventory_facts()
+                    if ssr_facts:
+                        log.info("[TRIP_SEARCH] stage=ssr_inventory_facts hotels=%d", ssr_facts)
+                except Exception:
+                    pass
                 # 2026-10-14: Trip.com redesigned the results page. Cards are now
                 # .hotel-list > .list-item with the hotel name in a.hotelName
                 # (hotelId= in its href); the legacy .hotel-card class no longer
@@ -1094,6 +1261,22 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                     for snapshot in snapshots:
                         raw_hotel = _tripcom_card_snapshot_to_raw(snapshot)
                         if raw_hotel and raw_hotel.get("id") is not None:
+                            facts = inventory_hotel_facts.get(str(raw_hotel["id"]))
+                            if facts:
+                                # Structured list-API facts outrank the DOM text
+                                # for the fields they provide; they come from the
+                                # same public page the user is scrolling.
+                                if facts.get("coordinates") and not raw_hotel.get("coordinates"):
+                                    raw_hotel["coordinates"] = facts["coordinates"]
+                                    raw_hotel["coordinate_source"] = "trip_com_list_api"
+                                if facts.get("stars") is not None and not raw_hotel.get("stars"):
+                                    raw_hotel["stars"] = facts["stars"]
+                                if facts.get("rating") is not None and raw_hotel.get("rating") is None:
+                                    raw_hotel["rating"] = facts["rating"]
+                                if facts.get("reviews_count") is not None and raw_hotel.get("reviews_count") is None:
+                                    raw_hotel["reviews_count"] = facts["reviews_count"]
+                                if facts.get("amenities") and not raw_hotel.get("amenities"):
+                                    raw_hotel["amenities"] = facts["amenities"]
                             target[str(raw_hotel["id"])] = raw_hotel
                         else:
                             card_parse_diagnostics["skipped"] += 1
