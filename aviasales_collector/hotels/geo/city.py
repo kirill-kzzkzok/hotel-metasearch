@@ -45,6 +45,15 @@ def _read_city_reference(connection: sqlite3.Connection, query: dict[str, Any]) 
     pair = _valid_coordinate_pair(row[3], row[4])
     if not pair:
         return None
+    # 2026-10-15 Cusco live defect: the pre-fix Nominatim fallback accepted a
+    # STATE boundary point (-12.5, -72.5) as the city center - ~125 km from
+    # every hotel. Such cached rows are area centroids (half-degree rounded),
+    # not city place points; treat them as stale so the resolver re-runs.
+    if row[7] == "nominatim_place_point" and (
+        abs(pair[0] * 10 - round(pair[0] * 10)) < 1e-6 and abs(pair[1] * 10 - round(pair[1] * 10)) < 1e-6
+        and (abs(pair[0] * 2 - round(pair[0] * 2)) < 1e-6 or abs(pair[1] * 2 - round(pair[1] * 2)) < 1e-6)
+    ):
+        return None
     return CityReference(row[0], row[1], row[2], pair[0], pair[1], row[5], row[6], row[7])
 
 def register_city_geo_profile(path: str | Path, profile: CityGeoProfile) -> None:

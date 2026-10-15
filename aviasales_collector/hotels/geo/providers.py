@@ -223,6 +223,16 @@ def _resolve_city_reference(database_path: str | Path, city: str, country: str |
             if not isinstance(item, dict):
                 continue
             address = item.get("address") if isinstance(item.get("address"), dict) else {}
+            # 2026-10-15 Cusco live defect: Nominatim ranks the STATE boundary
+            # (addresstype=state, -12.5/-72.5, ~125km from the real city)
+            # above the city for some destinations. Photon candidates are
+            # already filtered to osm_value city/town/municipality; apply the
+            # same place-level constraint here so an area centroid can never
+            # be persisted as a city center.
+            if str(item.get("addresstype") or item.get("type") or "") not in {
+                "city", "town", "municipality", "village", "borough", "suburb",
+            }:
+                continue
             candidate_names = [str(value) for value in (item.get("name"), address.get("city"),
                               address.get("town"), address.get("municipality"), address.get("village")) if value]
             city_confirmed = any(
