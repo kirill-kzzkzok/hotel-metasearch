@@ -300,7 +300,11 @@ def test_geo_stream_selects_hotels_by_stable_identity_after_reordering(tmp_path,
             assert response.status_code == 200
             batches = [json.loads(line) for line in response.text.splitlines() if line.strip()]
             returned = [hotel for batch in batches for hotel in batch["hotels"]]
-            assert [hotel["source_hotel_id"] for hotel in returned] == ["1"]
+            # 2026-10-15: the stream is two-phase (fast batch + geo update),
+            # so a hotel can legitimately appear twice; uniqueness is over
+            # identities, not over stream lines.
+            assert sorted({hotel["source_hotel_id"] for hotel in returned}) == ["1"]
+            assert len(batches) >= 1
             assert batches[-1]["complete"] is True
             assert batches[-1]["unresolved_hotel_keys"] == []
             assert (await client.post(

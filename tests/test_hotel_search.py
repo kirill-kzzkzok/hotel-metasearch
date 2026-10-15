@@ -81,6 +81,12 @@ _MIGRATED_TESTS = {
     # minutes for short distances. The archived assertion checked the old
     # provider suffix; the readable replacement below pins the new contract.
     "test_provider_metadata_is_folded_into_the_canonical_card_not_a_second_panel",
+    # 2026-10-15 directive: per-hotel detail pages are FORBIDDEN. These two
+    # archived tests mocked the detail-page collector (the removed fallback
+    # path); the fast-path-only contract is covered by
+    # test_hotel_rate_fastpath_fallback.py and test_hotel_rate_task_accounting.
+    "test_room_rate_enrichment_api_persists_selected_trip_rates",
+    "test_room_rate_api_retries_a_failed_trip_navigation_only_once",
 }
 globals().update({
     name: value for name, value in vars(_legacy).items()

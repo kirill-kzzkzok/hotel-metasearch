@@ -152,16 +152,13 @@ def test_sentinel_falls_back_for_all_hotels(monkeypatch, tmp_path, fast_path):
     _create_rate_test_database(database_path)
     ids = [201, 202]
     search = _search_with_hotels(ids)
-    detail = [
-        {"source_hotel_id": "201", "status": "ok", "rate_status": 200, "latency_ms": 5,
-         "inventory": {"rates": []}},
-        {"source_hotel_id": "202", "status": "no_rates", "rate_status": 200, "latency_ms": 5},
-    ]
-    calls = _patch_enrich(monkeypatch, ids, via_fetch=[], detail=detail)
+    calls = _patch_enrich(monkeypatch, ids, via_fetch=[], detail=[])
     result = _run_enrich(database_path, search)
 
-    assert calls["detail"] == [["201", "202"]]
-    assert _statuses(result) == ["ok", "no_rates"]
+    # 2026-10-15 directive: the detail-page pool is forbidden; hotels stay
+    # honestly queued instead of being collected through detail pages.
+    assert calls["detail"] == []
+    assert _statuses(result) == ["not_started", "not_started"]
 
 
 def test_fast_path_exception_falls_back_for_unreached_hotels(monkeypatch, tmp_path, fast_path):
@@ -184,16 +181,13 @@ def test_fast_path_exception_falls_back_for_unreached_hotels(monkeypatch, tmp_pa
         await on_result(0, outcome)
         raise RuntimeError("page closed mid-run")
 
-    detail = [
-        {"source_hotel_id": "302", "status": "no_rates", "rate_status": 200, "latency_ms": 5},
-        {"source_hotel_id": "303", "status": "no_rates", "rate_status": 200, "latency_ms": 5},
-    ]
-    calls = _patch_enrich(monkeypatch, ids, via_fetch=crashing_via_fetch, detail=detail)
+    calls = _patch_enrich(monkeypatch, ids, via_fetch=crashing_via_fetch, detail=[])
     result = _run_enrich(database_path, search)
 
-    # fallback only for the two hotels the crashed run never reached
-    assert calls["detail"] == [["302", "303"]]
-    assert _statuses(result) == ["ok", "no_rates", "no_rates"]
+    # 2026-10-15 directive: no detail fallback; the unreached hotels stay
+    # queued for the next enrichment cycle
+    assert calls["detail"] == []
+    assert _statuses(result) == ["ok", "not_started", "not_started"]
     # 301 was persisted exactly once (before the crash), never re-collected
     assert [hotel_id for hotel_id, _status, _attempt in calls["persist"] if hotel_id == "301"] == ["301"]
 
@@ -212,14 +206,12 @@ def test_partial_success_falls_back_only_for_remaining(monkeypatch, tmp_path, fa
         {"source_hotel_id": "403", "status": "ok", "rate_status": 200, "latency_ms": 5,
          "inventory": {"rates": []}},
     ]
-    detail = [
-        {"source_hotel_id": "402", "status": "no_rates", "rate_status": 200, "latency_ms": 5},
-    ]
-    calls = _patch_enrich(monkeypatch, ids, via_fetch=via, detail=detail)
+    calls = _patch_enrich(monkeypatch, ids, via_fetch=via, detail=[])
     result = _run_enrich(database_path, search)
 
-    assert calls["detail"] == [["402"]]
-    assert _statuses(result) == ["ok", "no_rates", "ok"]
+    # not_started stays queued; no detail pool (2026-10-15 directive)
+    assert calls["detail"] == []
+    assert _statuses(result) == ["ok", "not_started", "ok"]
 
 
 def test_mixed_merge_keeps_task_order_without_source_ids(monkeypatch, tmp_path, fast_path):
@@ -236,18 +228,13 @@ def test_mixed_merge_keeps_task_order_without_source_ids(monkeypatch, tmp_path, 
         {"status": "not_started"},
         {"status": "not_started"},
     ]
-    # detail pool gets [501, 503, 504]; returns items in that order without ids
-    detail = [
-        {"status": "no_rates", "rate_status": 200, "latency_ms": 5},
-        {"status": "http_error", "rate_status": 500, "latency_ms": 5},
-        {"status": "no_rates", "rate_status": 200, "latency_ms": 5},
-    ]
-    calls = _patch_enrich(monkeypatch, ids, via_fetch=via, detail=detail)
+    calls = _patch_enrich(monkeypatch, ids, via_fetch=via, detail=[])
     result = _run_enrich(database_path, search)
 
-    assert calls["detail"] == [["501", "503", "504"]]
-    assert _statuses(result) == ["no_rates", "ok", "http_error", "no_rates"]
-    assert len(result["hotels"]) == 4  # zip(strict=True) in the response path
+    # stubs stay queued in place; no detail pool, no positional merge
+    assert calls["detail"] == []
+    assert _statuses(result) == ["not_started", "ok", "not_started", "not_started"]
+    assert len(result["hotels"]) == 4
 
 
 def test_detail_fallback_persists_under_full_task_indices(monkeypatch, tmp_path, fast_path):
@@ -260,24 +247,24 @@ def test_detail_fallback_persists_under_full_task_indices(monkeypatch, tmp_path,
     search = _search_with_hotels(ids)
     via = [
         {"source_hotel_id": "601", "status": "ok", "rate_status": 200, "latency_ms": 5,
-         "inventory": {"rates": []}},
-        {"status": "not_started"},  # 602 -> detail subset index 0
+         "inventory": {"source_hotel_id": "601", "check_in": "2026-11-14",
+                       "check_out": "2026-11-17", "adults": 2, "children_count": 0,
+                       "rates": []}},
+        {"status": "not_started"},  # 602 stays queued (no detail fallback)
         {"source_hotel_id": "603", "status": "ok", "rate_status": 200, "latency_ms": 5,
-         "inventory": {"rates": []}},
-        {"status": "not_started"},  # 604 -> detail subset index 1
+         "inventory": {"source_hotel_id": "603", "check_in": "2026-11-14",
+                       "check_out": "2026-11-17", "adults": 2, "children_count": 0,
+                       "rates": []}},
+        {"status": "not_started"},  # 604 stays queued (no detail fallback)
     ]
-    detail = [
-        {"source_hotel_id": "602", "status": "no_rates", "rate_status": 200, "latency_ms": 5},
-        {"source_hotel_id": "604", "status": "no_rates", "rate_status": 200, "latency_ms": 5},
-    ]
-    calls = _patch_enrich(monkeypatch, ids, via_fetch=via, detail=detail)
+    calls = _patch_enrich(monkeypatch, ids, via_fetch=via, detail=[])
     _run_enrich(database_path, search)
 
-    detail_persisted = sorted(hotel_id for hotel_id, status, _attempt in calls["persist"]
-                              if status == "no_rates")
-    # inventories must belong to 602/604 (full task indices 1 and 3),
-    # not to 601/603 which the un-translated subset indices would select
-    assert detail_persisted == ["602", "604"]
+    # only the fast-path successes persist; 602/604 were never collected
+    # through detail pages (forbidden) and stay queued
+    assert calls["detail"] == []
+    persisted_ids = sorted(hotel_id for hotel_id, _status, _attempt in calls["persist"])
+    assert persisted_ids == ["601", "603"]
 
 
 def test_blocking_persists_terminal_row_instead_of_queued(monkeypatch, tmp_path, fast_path):

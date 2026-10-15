@@ -39,6 +39,8 @@ def test_trip_rates_use_trip_city_id_when_sravni_geo_id_is_missing(monkeypatch, 
     }
     monkeypatch.setattr(rate_enrichment, "_read_search", lambda *_args, **_kwargs: search)
     monkeypatch.setattr(rate_enrichment, "shutdown_tripcom_browser", lambda: None)
+    # Force the fast-path branch inside pytest (the collector is a fake).
+    monkeypatch.setattr(rate_enrichment, "_tripcom_rate_fast_path_enabled", lambda: True)
     captured = {}
 
     async def collect(hotels, _profile, *, concurrency, on_result):
@@ -47,7 +49,7 @@ def test_trip_rates_use_trip_city_id_when_sravni_geo_id_is_missing(monkeypatch, 
         return [{"source_hotel_id": "12345", "status": "no_rates", "rate_status": 200,
                  "latency_ms": 10, "inventory": {"rates": []}}]
 
-    monkeypatch.setattr(rate_enrichment, "collect_tripcom_room_rates", collect)
+    monkeypatch.setattr(rate_enrichment, "collect_tripcom_room_rates_via_fetch", collect)
     result = asyncio.run(rate_enrichment.enrich_tripcom_room_rates(
         database_path, "search-1", search, {"concurrency": 1}, None,
     ))

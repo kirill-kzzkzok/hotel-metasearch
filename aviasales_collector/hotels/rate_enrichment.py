@@ -202,8 +202,7 @@ async def enrich_tripcom_room_rates(
     timeline_token = _ACTIVE_SEARCH_TIMELINE_ID.set(search_id)
     # Outcomes that already reached the database through on_result. If the
     # fast path crashes mid-run, these partial results are restored into the
-    # response instead of being lost, and the detail-page fallback skips
-    # them so the same hotel cannot be collected and persisted twice.
+    # response instead of being lost (no detail-page fallback exists).
     persisted_outcomes: dict[str, dict[str, Any]] = {}
 
     async def persist_completed_rate_result(index: int, outcome: dict[str, Any]) -> None:
@@ -275,79 +274,38 @@ async def enrich_tripcom_room_rates(
         pool_started = time.perf_counter()
         log_search_timeline(search_id, "rate_pool_started", workers=min(int(payload.get("concurrency", 5)), len(tasks)),
                             scheduled=len(tasks))
-        # Fast path first: the site's own rate endpoint fetched in-page, one
-        # domain landing + N fetches, no per-hotel detail navigation. The
-        # detail-page pool runs for hotels the fast path never reached
-        # (template capture failure, fast-path exception, not_started stubs);
-        # an explicit protection response (spider flag / HTTP 401/403/429/430)
-        # stops the source for this request instead of repeating it through
-        # detail pages. Hotels already collected keep their results.
+        # The ONLY rate collector is the in-page fetch (the site's own rate
+        # endpoint, one domain landing + N fetches, no per-hotel detail
+        # navigation - 2026-10-15 user directive: opening individual hotel
+        # pages is forbidden). A failed fast path is reported honestly and
+        # affected hotels stay queued for the next enrichment cycle. An
+        # explicit protection response (spider flag / HTTP 401/403/429/430)
+        # also stops the source for this request. Hotels already collected
+        # keep their results.
         # pytest sets PYTEST_CURRENT_TEST; a real browser + real network calls
         # must never run from unit tests (see _tripcom_rate_fast_path_enabled).
         fast_path_enabled = _tripcom_rate_fast_path_enabled()
         enriched: list[dict[str, Any]] = []
-        protected = False
         if fast_path_enabled:
             try:
                 enriched = await collect_tripcom_room_rates_via_fetch(
                     tasks, profile, concurrency=payload.get("concurrency", 5),
                     on_result=persist_completed_rate_result,
                 )
-                # The fast path answers one item per task and pads hotels it
-                # never reached with not_started stubs, so the fallback
-                # decision is made on statuses, not on the result length. A
-                # blocked item means the source answered with protection:
-                # retrying the same source through detail pages would hit the
-                # same protection and only burn the profile's quota.
-                protected = any(item.get("status") == "blocked"
-                                for item in enriched if isinstance(item, dict))
             except Exception as exc:
-                log.warning("[RATE_FETCH] in_page_fetch_failed error=%s detail=%s; falling back to detail pages",
+                # 2026-10-15 user directive (absolute): never open individual
+                # hotel pages. The detail-page fallback is forbidden; a
+                # failed fast path is reported honestly and the affected
+                # hotels stay queued for the next enrichment cycle.
+                log.warning("[RATE_FETCH] in_page_fetch_failed error=%s detail=%s; hotels stay queued",
                             type(exc).__name__, str(exc)[:300])
-                # Restore outcomes the crashed run already persisted instead
-                # of dropping them; the fallback below then skips these
-                # hotels so they are not collected (and persisted) twice.
                 enriched = [persisted_outcomes.get(str(task["source_hotel_id"]))
                             or {"status": "not_started"} for task in tasks]
-        if not fast_path_enabled:
-            remaining = list(tasks)
-        elif protected:
-            remaining = []
-            log.info("[RATE_FETCH] fallback_to_detail_pages skipped reason=protection")
         else:
-            remaining = [task for index, task in enumerate(tasks)
-                         if index >= len(enriched)
-                         or not isinstance(enriched[index], dict)
-                         or str(enriched[index].get("status") or "") == "not_started"]
-        if remaining:
-            # Attempts are indexed by the full task order inside persistence;
-            # translate the subset-relative on_result index of the legacy pool
-            # back to the task index so a partial fallback cannot persist an
-            # outcome under the wrong hotel.
-            absolute_position = {str(task.get("source_hotel_id") or ""): index
-                                 for index, task in enumerate(tasks)}
-
-            async def persist_remaining_result(index: int, outcome: dict[str, Any]) -> None:
-                hotel_id = str(remaining[index].get("source_hotel_id") or "") if index < len(remaining) else ""
-                await persist_completed_rate_result(absolute_position.get(hotel_id, index), outcome)
-
-            log.info("[RATE_FETCH] fallback_to_detail_pages remaining=%d", len(remaining))
-            detail_results = await collect_tripcom_room_rates(
-                remaining, profile, concurrency=payload.get("concurrency", 5),
-                on_result=persist_remaining_result,
-            )
-            # Positional merge: the legacy pool contract returns one item per
-            # input hotel and its outcomes may omit source_hotel_id, so map
-            # each remaining task back to its slot in the task order.
-            merged: list[dict[str, Any] | None] = list(enriched)
-            if len(merged) < len(tasks):
-                merged.extend([None] * (len(tasks) - len(merged)))
-            for task, item in zip(remaining, detail_results, strict=False):
-                slot = absolute_position.get(str(task.get("source_hotel_id") or ""))
-                if slot is not None:
-                    merged[slot] = item
-            enriched = [item if item is not None else {"status": "not_started"}
-                        for item in merged]
+            # Fast path disabled explicitly (tests only): nothing to do -
+            # the detail-page pool is forbidden by the same directive.
+            log.info("[RATE_FETCH] fast_path_disabled; detail pages are forbidden, hotels stay queued")
+            enriched = [{"status": "not_started"} for _ in tasks]
         status_counts: dict[str, int] = {}
         for item in enriched:
             key = str(item.get("status") or "unknown")
@@ -377,6 +335,11 @@ async def enrich_tripcom_room_rates(
     finally:
         _ACTIVE_SEARCH_TIMELINE_ID.reset(timeline_token)
         TRIP_PROFILE_LOCK.release()
+    # Pad a short/empty fast-path result with not_started stubs so the
+    # response always carries one outcome per task (hotels stay queued).
+    if len(enriched) < len(tasks):
+        enriched = list(enriched) + [{"status": "not_started"}
+                                     for _ in range(len(tasks) - len(enriched))]
     for outcome in enriched:
         outcome.pop("inventory", None)
         outcome.pop("property_details", None)
@@ -386,7 +349,10 @@ async def enrich_tripcom_room_rates(
         for record in hotel.get("source_records") or [hotel]:
             if record.get("source") == "trip_com":
                 refreshed_by_id[str(record.get("source_hotel_id"))] = record
-    outcomes_by_id = {str(task["source_hotel_id"]): item for task, item in zip(tasks, enriched, strict=True)}
+    # A crashed fast path may return fewer items than tasks; the sentinel
+    # branch rebuilds per-task outcomes below, so a short list is normal.
+    outcomes_by_id = {str(task["source_hotel_id"]): item
+                      for task, item in zip(tasks, enriched, strict=False)}
     outcomes_by_id.update(reused_outcomes)
     return {
         "search_id": search_id,

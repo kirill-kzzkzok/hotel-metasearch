@@ -105,16 +105,16 @@ async def _capture_rate_template(page: Any, hotel: dict[str, Any]) -> dict[str, 
 async def collect_tripcom_room_rates_via_fetch(
         hotels: list[dict[str, Any]], profile: str | Path,
         concurrency: int = 5,
-        on_result: Any | None = None,
-        detail_page_fallback: Any = None) -> list[dict[str, Any]]:
+        on_result: Any | None = None) -> list[dict[str, Any]]:
     """Collect rate inventories through the site's own rate endpoint in-page.
 
     One persistent context, one domain landing page, sequential in-page POST
     fetches with a small inter-request delay. This replaces per-hotel detail
     navigation (15-20s each) with a ~1-4s fetch while using the identical
     public endpoint and payload the detail page uses. A template capture
-    failure returns the empty sentinel so the caller can fall back to the
-    detail-page pool; a protection signal (spider flag or HTTP
+    failure returns the empty sentinel (the caller keeps unreached hotels
+    queued - per-hotel detail pages are forbidden, 2026-10-15 directive); a
+    protection signal (spider flag or HTTP
     401/403/429/430) instead stops the run and the blocked hotel is reported
     immediately. The result always carries one item per input hotel (hotels
     never attempted are not_started); already-collected hotels keep their
