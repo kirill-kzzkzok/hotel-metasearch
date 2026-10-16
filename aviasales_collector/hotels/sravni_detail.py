@@ -280,8 +280,15 @@ def enrich_sravni_hotel_pages(database_path: str | Path, search_id: str,
         with ThreadPoolExecutor(max_workers=SRAVNI_DETAIL_CONCURRENCY) as pool:
             for hotel, facts in pool.map(work, pending):
                 if facts and (facts["check_in_text"] or facts["amenities_text"]):
-                    _persist_metadata(database_path, search_id, hotel["source_hotel_id"], facts)
-                    enriched += 1
+                    try:
+                        _persist_metadata(database_path, search_id, hotel["source_hotel_id"], facts)
+                        enriched += 1
+                    except sqlite3.OperationalError as exc:
+                        # A locked/busy database must not kill the whole
+                        # enrichment cycle; the hotel stays pending.
+                        failed += 1
+                        log.warning("[SRAVNI_DETAIL] persist_skipped hotel=%s error=%s",
+                                    hotel["source_hotel_id"], str(exc)[:120])
                 else:
                     failed += 1
     elapsed_ms = round((time.perf_counter() - started) * 1000, 1)

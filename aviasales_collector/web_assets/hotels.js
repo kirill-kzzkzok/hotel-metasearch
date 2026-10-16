@@ -1148,6 +1148,18 @@ function cardRenderSignature(hotel, index, nights, filters, currency, providers,
     hotel.property_details?.description ? "d" : "",
     (hotel.source_records || []).map((record) => [record.source,
       record.source_hotel_id, record.room_rate_enrichment_status || ""].join(",")).join("|"),
+    // 2026-10-16: every NEW rendered field must be in the signature or a
+    // re-render with fresh enrichment data is skipped as "unchanged":
+    // policy times (sravni API), description, subscores, landmarks, offer
+    // tags (scarcity/late checkout), room photos/area/bed.
+    JSON.stringify(hotelPolicy(hotel)),
+    (hotel.property_details?.description_text || "").slice(0, 80),
+    JSON.stringify(hotel.rating_subscores || []),
+    hotel.landmarks_desc || "",
+    (hotel.offer_tags || []).join(","),
+    (hotel.room_options || []).map((option) => [
+      (option.images || []).length, option.room_area || "",
+      option.amenities?.length || 0]).join(";"),
     JSON.stringify(filters), currency || "", JSON.stringify(providers || []),
   ].join("~");
 }
