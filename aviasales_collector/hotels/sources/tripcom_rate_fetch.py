@@ -217,7 +217,13 @@ async def collect_tripcom_room_rates_via_fetch(
                           for task_index, (index, hotel) in enumerate(enumerate(hotels))]
             outcomes_by_index: dict[int, dict[str, Any]] = {}
             for coro in asyncio.as_completed(tasks_pool):
-                index, outcome = await coro
+                try:
+                    index, outcome = await coro
+                except asyncio.CancelledError:
+                    # A protection signal cancelled the remaining fetches;
+                    # cancelled tasks keep their not_started stubs - do not
+                    # let the cancellation kill the whole collector.
+                    continue
                 outcomes_by_index[index] = outcome
                 hotel = hotels[index]
                 hotel_id = str(hotel.get("source_hotel_id") or "")
