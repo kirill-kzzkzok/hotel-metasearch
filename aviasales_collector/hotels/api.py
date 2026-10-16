@@ -26,6 +26,7 @@ from .pagination import (SRAVNI_DISCOVERY_BUDGET_SECONDS,
 from .persistence import _sanitize_enrichment_error_message
 from .pipeline import _finalize_search
 from .rate_enrichment import enrich_tripcom_room_rates
+from .sravni_detail import enrich_sravni_hotel_pages
 from .read_model import _read_search
 from .runtime import (_profiled_sqlite_connect, _safe_json_loads, log,
                       log_search_timeline)
@@ -249,6 +250,15 @@ def build_router(database_path: str | Path) -> APIRouter:
         result = _read_search(database_path, search_id)
         if result is None:
             raise HTTPException(status_code=404, detail="Hotel search not found")
+        # SravniOtel policy/amenity enrichment runs off the request path:
+        # light HTTP page fetches (no browser, no Trip.com detail pages) that
+        # fill check-in/out times and hotel amenities for sravni cards.
+        async def _run_sravni_page_enrichment() -> None:
+            try:
+                await asyncio.to_thread(enrich_sravni_hotel_pages, database_path, search_id)
+            except Exception as exc:  # Page enrichment must never break rate enrichment.
+                log.info("[SRAVNI_DETAIL] enrichment_skipped search=%s error=%s", search_id, str(exc)[:120])
+        sravni_task = asyncio.create_task(_run_sravni_page_enrichment())
         try:
             payload = await request.json()
         except (ValueError, TypeError):

@@ -173,6 +173,30 @@ def normalize_tripcom_rate_inventory(payload: Any, *, source_hotel_id: str,
         physical_room_id = str(rate.get("physicalRoomId") or "")
         room_detail = (room_details or {}).get(physical_room_id) or {}
         physical_room = physical_rooms.get(physical_room_id)
+        # 2026-10-16: the rate payload itself carries rich per-room facilities
+        # (physicRoomMap[room].physicalFacilityList / faciltityInfo.list
+        # sub-titles / wifiInfo) - Wi-Fi, air conditioning, view, kettle.
+        # Extract them without opening any detail page.
+        physical_room_amenities: list[str] | None = None
+        if isinstance(physical_room, dict):
+            facility_titles: list[str] = []
+            for facility in (physical_room.get("physicalFacilityList")
+                             or physical_room.get("newPhysicalFacilityList") or []):
+                if isinstance(facility, dict) and isinstance(facility.get("title"), str)                         and facility["title"].strip():
+                    facility_titles.append(facility["title"].strip())
+            wifi_info = physical_room.get("wifiInfo")
+            if isinstance(wifi_info, dict) and isinstance(wifi_info.get("title"), str)                     and wifi_info["title"].strip():
+                facility_titles.append(wifi_info["title"].strip())
+            facility_info = physical_room.get("faciltityInfo")
+            if isinstance(facility_info, dict):
+                for category in (facility_info.get("list") or []):
+                    if not isinstance(category, dict):
+                        continue
+                    for sub in (category.get("subList") or []):
+                        if isinstance(sub, dict) and isinstance(sub.get("title"), str)                                 and sub["title"].strip():
+                            facility_titles.append(sub["title"].strip())
+            facility_titles = [t for t in dict.fromkeys(facility_titles) if not re.match(r"^\d+\s*(?:м²|m²|sqm| кв)", t)]
+            physical_room_amenities = facility_titles[:24] or None
         physical_room_name = physical_room.get("name") if isinstance(physical_room, dict) else None
         physical_room_name = physical_room_name.strip() if isinstance(physical_room_name, str) else None
         rates.append({
@@ -189,6 +213,7 @@ def normalize_tripcom_rate_inventory(payload: Any, *, source_hotel_id: str,
                  if isinstance(rate.get(key), str) and rate[key].strip()), None),
             "bed_type": room_detail.get("bed_type"),
             "room_amenities": room_detail.get("room_amenities") or
+                physical_room_amenities or
                 text_items(rate.get("roomFacilityList"), "title") or None,
             "meal_raw_text": raw_meal,
             **meal_facts,

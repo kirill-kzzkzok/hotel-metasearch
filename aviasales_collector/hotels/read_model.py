@@ -810,6 +810,18 @@ def _read_search(
             property_details = _safe_json_loads(latest_rate_fetch["property_details_json"], None) \
                 if latest_rate_fetch and latest_rate_fetch["property_details_json"] else None
             property_details = property_details if isinstance(property_details, dict) else None
+            # 2026-10-16: SravniOtel hotel-page facts (policy times, hotel
+            # amenities) arrive through hotel_provider_metadata; merge them as
+            # the property layer for cards whose sources carry no policy.
+            sravni_page_facts: dict[str, Any] | None = None
+            for detail in provider_details:
+                if detail.get("source") == "sravniotel_hotel_page_html":
+                    sravni_page_facts = detail
+                    break
+            if sravni_page_facts and isinstance(property_details, dict):
+                property_details = {**sravni_page_facts, **property_details}
+            elif sravni_page_facts:
+                property_details = dict(sravni_page_facts)
             detail_coordinates = _coordinate_pair(property_details.get("coordinates")) if property_details else None
             if not provider_coordinates and detail_coordinates:
                 provider_coordinates = detail_coordinates
@@ -840,6 +852,11 @@ def _read_search(
                 persisted_amenities = extract_amenities(raw_hotel)
             else:
                 persisted_amenities = list(persisted_amenities)
+            sravni_page_amenities = (sravni_page_facts or {}).get("amenities_text")
+            if isinstance(sravni_page_amenities, list):
+                persisted_amenities = list(dict.fromkeys([
+                    *persisted_amenities, *[str(item) for item in sravni_page_amenities if str(item).strip()],
+                ]))
             if property_details:
                 persisted_amenities = list(dict.fromkeys([
                     *persisted_amenities, *property_details.get("amenities", []),

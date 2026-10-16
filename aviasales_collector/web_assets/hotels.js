@@ -321,11 +321,36 @@ function initializeMap() {
   // Use the public OSM France HOT endpoint rather than the main OSM tile
   // server, which can reject browser traffic under its volunteer-server
   // policy. No API key is required; keep both OSM and HOT attribution.
-  L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", {
+  // 2026-10-16: tile providers rate-limit bursts (a 400-marker map asks for
+  // dozens of tiles at once) and answer with EMPTY 1x1 PNGs - the map then
+  // looks greyed-out/blurry. An empty tile is a valid image so Leaflet fires
+  // tileload, not tileerror; we detect it by naturalWidth==1 and re-fetch
+  // the same tile from the fallback provider (Carto Voyager CDN).
+  const baseTiles = L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", {
     subdomains: "abc",
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, tiles style <a href="https://hotosm.org/">HOT</a>',
   }).addTo(hotelMap);
+  const retriedTiles = new Set();
+  baseTiles.on("tileload", (event) => {
+    const tile = event.tile;
+    if (!tile || tile.naturalWidth !== 1 || retriedTiles.has(tile.src)) return;
+    retriedTiles.add(tile.src);
+    const retry = new Image();
+    retry.onload = () => {
+      if (retry.naturalWidth > 1) {
+        tile.src = retry.src;
+        tile.style.visibility = "";
+      }
+    };
+    retry.src = tile.src.replace("tile.openstreetmap.fr/hot", "tile.openstreetmap.de");
+  });
+  baseTiles.on("tileerror", (event) => {
+    const tile = event.tile;
+    if (!tile || retriedTiles.has(tile.src)) return;
+    retriedTiles.add(tile.src);
+    tile.src = tile.src.replace("tile.openstreetmap.fr/hot", "tile.openstreetmap.de");
+  });
   // Every hotel remains an independent price marker. Clustering hides the
   // provider price context and makes hover/click selection ambiguous.
   hotelMarkers = L.featureGroup();
