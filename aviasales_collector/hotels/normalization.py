@@ -388,6 +388,26 @@ def _edit_distance(left: str, right: str) -> int:
         previous = current
     return previous[-1]
 
+def _normalize_coordinate_pair(value: Any) -> dict[str, float] | None:
+    """Accept {lat,lon}/{lat,lng}/{latitude,longitude} provider shapes.
+
+    SravniOtel list results carry the point under item["location"] while
+    other providers use item["coordinates"]; without this fallback 394/400
+    live cards resolved to no coordinates (empty map, no metro/center).
+    """
+    if not isinstance(value, dict):
+        return None
+    lat = value.get("lat", value.get("latitude"))
+    lon = value.get("lon") if value.get("lon") is not None else (value.get("lng") if value.get("lng") is not None else value.get("longitude"))
+    try:
+        lat_f, lon_f = float(lat), float(lon)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not (-90 <= lat_f <= 90 and -180 <= lon_f <= 180):
+        return None
+    return {"lat": lat_f, "lng": lon_f}
+
+
 def normalize_hotel(item: dict[str, Any], observed_at: str | None = None,
                     source: str = "sravniotel", query: dict[str, Any] | None = None) -> dict[str, Any] | None:
     hotel_id = item.get("id")
@@ -499,7 +519,8 @@ def normalize_hotel(item: dict[str, Any], observed_at: str | None = None,
         "amenities": extract_amenities(item),
         **hotel_breakfast,
         "offers": offers, "observed_at": observed_at or utc_now(), "canonical_hotel_id": None,
-        "coordinates": item.get("coordinates"), "phone": item.get("phone"),
+        "coordinates": _normalize_coordinate_pair(item.get("coordinates")) or _normalize_coordinate_pair(item.get("location")),
+        "phone": item.get("phone"),
         "website": item.get("website"), "chain": item.get("chain"),
         "city": (query or {}).get("city_name"), "country": item.get("country"),
         "beach_access": item.get("beach_access") or item.get("beachAccess") or "unknown",

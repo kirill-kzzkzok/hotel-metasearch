@@ -351,7 +351,7 @@ def _read_search(
                 raw_hotel = _safe_json_loads(row["raw_json"], {})
                 if not isinstance(raw_hotel, dict):
                     raw_hotel = {}
-                matching_coordinates = _coordinate_pair(raw_hotel.get("coordinates"))
+                matching_coordinates = _coordinate_pair(raw_hotel.get("coordinates")) or _coordinate_pair(raw_hotel.get("location"))
                 if matching_coordinates and _is_enrichment_coordinate_source(
                     raw_hotel.get("coordinate_source")
                 ):
@@ -525,7 +525,7 @@ def _read_search(
             raw_hotel = raw_hotels_by_key.get(key)
             if not isinstance(raw_hotel, dict):
                 raw_hotel = {}
-            provider_coordinates = _coordinate_pair(raw_hotel.get("coordinates"))
+            provider_coordinates = _coordinate_pair(raw_hotel.get("coordinates")) or _coordinate_pair(raw_hotel.get("location"))
             if provider_coordinates and _is_enrichment_coordinate_source(raw_hotel.get("coordinate_source")):
                 provider_coordinates = None
             persisted = coordinate_observations.get(key)
@@ -562,7 +562,7 @@ def _read_search(
             raw_hotel = raw_hotels_by_key.get(key)
             if not isinstance(raw_hotel, dict):
                 raw_hotel = {}
-            provider_coordinates = _coordinate_pair(raw_hotel.get("coordinates"))
+            provider_coordinates = _coordinate_pair(raw_hotel.get("coordinates")) or _coordinate_pair(raw_hotel.get("location"))
             geocoded_coordinates = None
             if provider_coordinates and _is_enrichment_coordinate_source(raw_hotel.get("coordinate_source")):
                 geocoded_coordinates, provider_coordinates = provider_coordinates, None
@@ -627,7 +627,11 @@ def _read_search(
                 rating = None
             coordinate_started = time.perf_counter()
             raw_coordinate_source = raw_hotel.get("coordinate_source")
-            provider_coordinates = _coordinate_pair(raw_hotel.get("coordinates"))
+            # 2026-10-15: SravniOtel persists the point under raw location
+            # ({lat,lon}); the coordinates key is absent in its list results.
+            # Without this fallback 393/400 live cards rendered with no point
+            # (empty map, no metro/center distances) despite valid raw data.
+            provider_coordinates = _coordinate_pair(raw_hotel.get("coordinates"))                 or _coordinate_pair(raw_hotel.get("location"))
             geocoded_coordinates = None
             geocoded_coordinate_source = None
             geocoded_coordinate_method = None

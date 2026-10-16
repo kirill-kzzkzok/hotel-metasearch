@@ -1565,7 +1565,7 @@ function render(data) {
     meta.append(reviews);
     if (hotel.review_stats?.length > 1) {
       const sources = hotel.review_stats.filter((item) => Number(item?.rating) > 0 && item.source !== review?.source)
-        .map((item) => `${sourceLabels[item.source] || item.source}: ${Number(item.rating).toFixed(1)}${item.rating_scale ? `/${item.rating_scale}` : ""} · ${Number(item.reviews_count) > 0 ? Number(item.reviews_count).toLocaleString("ru-RU") : "—"}`);
+        .map((item) => `${sourceLabels[item.source] || item.source}: ${Number(item.rating).toFixed(1)}${item.rating_scale ? `/${item.rating_scale}` : ""}${Number(item.reviews_count) > 0 ? ` · ${Number(item.reviews_count).toLocaleString("ru-RU")}` : ""}`);
       if (sources.length) addText(meta, "secondary-rating", sources.join(" · "));
     }
     main.append(meta);
@@ -1576,7 +1576,9 @@ function render(data) {
     }
     const centerRaw = hotel.location?.distance_to_center_km;
     const centerDistance = Number(centerRaw);
-    addText(context, "location-line", `📍 ${hasDistance(centerRaw) ? formatDistance(centerDistance) : "—"} до центра`);
+    if (hasDistance(centerRaw)) {
+      addText(context, "location-line", `📍 ${formatDistance(centerDistance)} до центра`);
+    }
     const beachRaw = hotel.location?.distance_to_beach_km;
     const beachDistance = Number(beachRaw);
     // 2026-10-15: applicability must be explicit (beach_relevant === true).
@@ -1585,12 +1587,33 @@ function render(data) {
     const beachApplicable = hotel.location?.beach_relevant === true
       && hotel.location?.beach_status !== "not_applicable";
     if (beachApplicable) {
-      addText(context, "beach-line", `🏖 ${hasDistance(beachRaw) ? formatDistance(beachDistance) : "—"} до пляжа`);
+      if (hasDistance(beachRaw)) {
+        addText(context, "beach-line", `🏖 ${formatDistance(beachDistance)} до пляжа`);
+      }
     }
+    // 2026-10-15: one metro line, best source. OSM stage distance and the
+    // provider landmark (also a metro station) used to render as two
+    // different lines with different distances. Merge them: keep the
+    // closest one, show the station name, walking minutes when walkable.
+    const osmMetro = hotel.location?.nearby_geo_places?.metro;
     const metroValue = hotel.location?.distance_to_metro_km;
     const metroDistance = Number(metroValue);
-    if (metroValue !== null && metroValue !== undefined && Number.isFinite(metroDistance) && metroDistance >= 0) {
-      addText(context, "geo-distance-line", `🚇 ${formatDistance(metroDistance)} до метро` + walkingMinutes(metroDistance));
+    const providerMetro = hotel.location?.landmark_type === "metro"
+      ? {name: hotel.location?.landmark_name, km: hotel.location?.distance_to_landmark_km}
+      : null;
+    let metroLine = null;
+    if (hasDistance(metroValue)) {
+      metroLine = {km: metroDistance, name: (osmMetro && osmMetro.name) || (providerMetro && providerMetro.name) || null};
+      if (providerMetro && hasDistance(providerMetro.km) && Number(providerMetro.km) < metroDistance) {
+        metroLine = {km: Number(providerMetro.km), name: providerMetro.name};
+      }
+    } else if (providerMetro && hasDistance(providerMetro.km)) {
+      metroLine = {km: Number(providerMetro.km), name: providerMetro.name};
+    }
+    if (metroLine) {
+      const station = metroLine.name ? ` (${metroLine.name})` : "";
+      addText(context, "geo-distance-line",
+        `🚇 ${formatDistance(metroLine.km)} до метро${station}` + walkingMinutes(metroLine.km));
     }
     const airportValue = hotel.location?.distance_to_airport_km;
     const airportDistance = Number(airportValue);
@@ -1599,11 +1622,16 @@ function render(data) {
     }
     if (hotel.location?.distance_to_landmark_km !== null && hotel.location?.distance_to_landmark_km !== undefined
       && hotel.location?.landmark_name) {
-      const icon = hotel.location.landmark_type === "beach" ? "🏖 "
-        : ["metro", "subway", "station"].includes(hotel.location.landmark_type) ? "🚇 " : "📍 ";
-      addText(context, "landmark-line",
-        `${icon}${formatDistance(hotel.location.distance_to_landmark_km)} до ${hotel.location.landmark_name}`
-        + walkingMinutes(hotel.location.distance_to_landmark_km));
+      // 2026-10-15: metro/airport/beach provider landmarks duplicate the
+      // dedicated lines above - only an unrelated landmark (district,
+      // sight) renders here.
+      const landmarkType = String(hotel.location.landmark_type || "");
+      const duplicated = ["metro", "subway", "station", "airport", "beach"].includes(landmarkType);
+      if (!duplicated) {
+        addText(context, "landmark-line",
+          `📍 ${formatDistance(hotel.location.distance_to_landmark_km)} до ${hotel.location.landmark_name}`
+          + walkingMinutes(hotel.location.distance_to_landmark_km));
+      }
     }
     const osmLandmarkValue = hotel.location?.distance_to_osm_landmark_km;
     if (osmLandmarkValue !== null && osmLandmarkValue !== undefined
@@ -1624,10 +1652,17 @@ function render(data) {
         more.textContent = `+${amenities.length - 4} удобства`; more.setAttribute("aria-label", `Показать все удобства: ${hotel.name}`);
         more.addEventListener("click", () => openAmenitiesModal(hotel)); amenityBadges.append(more);
       }
-    } else addBadge(amenityBadges, "—", "badge-muted");
+    } // 2026-10-15: no "—" amenity placeholder - unknown amenities are omitted
     amenityLine.append(amenityBadges); context.append(amenityLine);
     const policy = hotelPolicy(hotel);
-    addText(context, "policy-line", `Заезд ${policy.checkIn || "—"} · Выезд ${policy.checkOut || "—"}`);
+    // 2026-10-15: no dash placeholders. The check-in/out TIMES exist only in
+    // Trip.com detail pages (forbidden to open); Sravni's list API and the
+    // rate endpoint carry no policy times. When neither time is known the
+    // whole line is omitted instead of rendering "Заезд — · Выезд —".
+    if (policy.checkIn || policy.checkOut) {
+      addText(context, "policy-line",
+        `Заезд ${policy.checkIn || "не указан"} · Выезд ${policy.checkOut || "не указан"}`);
+    }
     if (hotel.review_summary?.phrases?.length) {
       const themeNames = {location: "расположение", cleanliness: "чистота", breakfast: "завтрак", staff: "персонал", room: "номера", noise: "шум", bathroom: "ванная", pool: "бассейн", value: "цена и качество"};
       const positive = (hotel.review_summary.positive?.length ? hotel.review_summary.positive : hotel.review_summary.mentions || [])
@@ -1695,12 +1730,22 @@ function render(data) {
       full_board: "Полный пансион", all_inclusive: "Всё включено", breakfast_dinner: "Завтрак + ужин", dinner: "Ужин",
       lunch_dinner: "Обед + ужин", unknown: "Питание не указано"};
     const offerBadges = document.createElement("div"); offerBadges.className = "hotel-badges offer-badges";
-    if (roomOffer?.meal_plan || roomOffer?.meal_status) {
-      const mealLabel = mealPresentation(roomOffer, offerMealLabels);
-      const mealClass = roomOffer.meal_status === "paid" ? "badge-meal"
-        : roomOffer.meal_status === "unknown" || roomOffer.meal_plan === "unknown"
-          ? "badge-muted" : "badge-meal";
-      addBadge(offerBadges, mealLabel, mealClass);
+    // 2026-10-15: the card meal badge prefers the BEST known meal fact
+    // across sources. The offer (Sravni) usually has meal_plan=unknown while
+    // Trip.com room_rates carry the real meal facts (breakfast included);
+    // the card previously showed "Питание не указано" even when room_rates
+    // had the answer. Unknown meal facts omit the badge entirely.
+    const mealSource = [roomOffer, ...(hotel.room_rates || [])]
+      .find((row) => row && (row.meal_plan || row.meal_status)
+        && !(row.meal_status === "unknown" && (row.meal_plan == null || row.meal_plan === "unknown") && !row.meal_raw_text));
+    if (mealSource) {
+      const mealLabel = mealPresentation(mealSource, offerMealLabels);
+      if (mealLabel && mealLabel !== "Питание не указано") {
+        const mealClass = mealSource.meal_status === "paid" ? "badge-meal"
+          : mealSource.meal_status === "unknown" || mealSource.meal_plan === "unknown"
+            ? "badge-muted" : "badge-meal";
+        addBadge(offerBadges, mealLabel, mealClass);
+      }
     }
     if (roomOffer?.cancellation === "free") addBadge(offerBadges, "Бесплатная отмена", "badge-cancel");
     if (offerBadges.childElementCount) main.append(offerBadges);

@@ -141,7 +141,7 @@ async def collect_tripcom_room_rates_via_fetch(
 
             template = await _capture_rate_template(page, hotels[0])
             if template is None:
-                return []  # sentinel: caller falls back to the detail-page pool
+                return []  # sentinel: unreached hotels stay queued (no detail fallback)
             # The detail page keeps navigating client-side after goto; its
             # execution context can be destroyed mid-evaluate ("Execution
             # context was destroyed, most likely because of a navigation" -
@@ -151,8 +151,28 @@ async def collect_tripcom_room_rates_via_fetch(
             await page.wait_for_timeout(1500)
             await page.evaluate("tpl => { window.__rateTemplate = tpl; }", template)
 
-            for index, hotel in enumerate(hotels):
+            # 2026-10-15: parallel tabs. The sequential loop (one fetch, then
+            # a fixed pause) needed ~3.2s per hotel - 150 hotels = 8 minutes.
+            # Workers share ONE context (one browser, one profile); a global
+            # request-schedule lock keeps the inter-request pause so the
+            # request rate stays as gentle as before, latency is simply
+            # overlapped with other tabs' waiting.
+            _REQUEST_SCHEDULE_LOCK = asyncio.Lock()
+            effective_concurrency = max(1, min(int(concurrency or 1), 4, len(hotels)))
+            worker_pages = [page]
+            for _ in range(effective_concurrency - 1):
+                try:
+                    worker_pages.append(await context.new_page())
+                    await worker_pages[-1].goto("https://ru.trip.com/", wait_until="domcontentloaded", timeout=45000)
+                    await worker_pages[-1].evaluate("tpl => { window.__rateTemplate = tpl; }", template)
+                except Exception:
+                    break
+
+            async def _fetch_one(worker_page, index, hotel):
                 hotel_id = str(hotel.get("source_hotel_id") or "")
+                if _protection_signalled.is_set():
+                    return index, {"source_hotel_id": hotel_id, "status": "not_started",
+                                   "latency_ms": 0}
                 started = time.perf_counter()
                 try:
                     fetch_started = time.perf_counter()
@@ -173,12 +193,15 @@ async def collect_tripcom_room_rates_via_fetch(
                                      if isinstance(age, int) and 0 <= age <= 17]
                     if children_ages:
                         fetch_task["childInfoItems"] = [{"age": age} for age in children_ages]
-                    outcome = await asyncio.wait_for(
-                        page.evaluate(_FETCH_JS, fetch_task),
-                        timeout=TRIPCOM_RATE_FETCH_PER_HOTEL_TIMEOUT_SECONDS,
-                    )
+                    async with _REQUEST_SCHEDULE_LOCK:
+                        outcome = await asyncio.wait_for(
+                            worker_page.evaluate(_FETCH_JS, fetch_task),
+                            timeout=TRIPCOM_RATE_FETCH_PER_HOTEL_TIMEOUT_SECONDS,
+                        )
+                        await worker_page.wait_for_timeout(
+                            int(TRIPCOM_RATE_FETCH_INTER_REQUEST_DELAY_SECONDS * 1000))
                 except asyncio.TimeoutError:
-                    results[index] = {
+                    return index, {
                         "source_hotel_id": hotel_id,
                         "status": "rate_inventory_timeout",
                         "operation": "tripcom_detail_rate_inventory",
@@ -187,6 +210,28 @@ async def collect_tripcom_room_rates_via_fetch(
                         "attempt": 1, "retry_count": 0,
                         "latency_ms": round((time.perf_counter() - started) * 1000),
                     }
+                return index, outcome
+
+            _protection_signalled = asyncio.Event()
+            tasks_pool = [asyncio.create_task(_fetch_one(worker_pages[task_index % len(worker_pages)], index, hotel))
+                          for task_index, (index, hotel) in enumerate(enumerate(hotels))]
+            outcomes_by_index: dict[int, dict[str, Any]] = {}
+            for coro in asyncio.as_completed(tasks_pool):
+                index, outcome = await coro
+                outcomes_by_index[index] = outcome
+                hotel = hotels[index]
+                hotel_id = str(hotel.get("source_hotel_id") or "")
+                started = time.perf_counter()
+                if _protection_signalled.is_set():
+                    for pending in tasks_pool:
+                        pending.cancel()
+                # Classify + persist in completion order (results keep the
+                # per-hotel slot so the caller response stays positional).
+                # A timeout stub is already terminal; everything else is the
+                # raw page.evaluate outcome ({status, payloadJson, spider})
+                # and must be classified below.
+                if outcome.get("status") == "rate_inventory_timeout":
+                    item = outcome
                 else:
                     status = outcome.get("status")
                     spider = outcome.get("spider")
@@ -198,17 +243,16 @@ async def collect_tripcom_room_rates_via_fetch(
                         except (TypeError, ValueError):
                             payload = None
                     if status in {401, 403, 429, 430} or spider is not None:
-                        # Protection signal: stop issuing further fetches. The
-                        # blocked outcome is reported (and persisted) for this
-                        # hotel before the break; remaining hotels keep their
-                        # not_started stubs and the caller must not retry the
-                        # same source through detail pages.
+                        # Protection signal: the blocked outcome is reported
+                        # (and persisted) for this hotel; remaining hotels
+                        # keep their not_started stubs and the caller must not
+                        # retry the same source through detail pages.
                         import logging
                         logging.getLogger(__name__).warning(
                             "[RATE_FETCH] protection signal hotel=%s status=%s spider=%s "
                             "payload_head=%s", hotel_id, status, spider,
                             (payload_json or "")[:300])
-                        results[index] = {
+                        item = {
                             "source_hotel_id": hotel_id,
                             "status": "blocked",
                             "rate_status": status,
@@ -218,44 +262,41 @@ async def collect_tripcom_room_rates_via_fetch(
                             "attempt": 1, "retry_count": 0,
                             "latency_ms": round((time.perf_counter() - started) * 1000),
                         }
-                        if on_result is not None:
-                            await on_result(index, results[index])
-                        break
-                    diagnostics = {
-                        "hotel_id": hotel_id,
-                        "rate_fetch_mode": "in_page_fetch",
-                        "rate_fetch_elapsed_ms": round((time.perf_counter() - fetch_started) * 1000, 1),
-                        "rate_response_status": status,
-                    }
-                    status_out, inventory, error_type, error_message = _classify_tripcom_rate_response(
-                        status, payload, body_wait_error=None,
-                        response_body_timeout=None,
-                        source_hotel_id=hotel_id,
-                        check_in=str(hotel.get("check_in")), check_out=str(hotel.get("check_out")),
-                        adults=int(hotel.get("adults", 2)),
-                        children_count=int(hotel.get("children_count", 0)),
-                        room_details=None,
-                    )
-                    item = {
-                        "source_hotel_id": hotel_id,
-                        "operation": "tripcom_detail_rate_inventory",
-                        "attempt": 1, "retry_count": 0,
-                        "rate_status": status,
-                        "latency_ms": round((time.perf_counter() - started) * 1000),
-                    }
-                    item["status"] = status_out
-                    if inventory is not None:
-                        item["inventory"] = inventory
-                        diagnostics["rate_count"] = len(inventory.get("rates", []))
-                    if error_type:
-                        item["error_type"] = error_type
-                    if error_message:
-                        item["error_message"] = error_message
-                    item["diagnostics"] = diagnostics
-                    results[index] = item
-                await page.wait_for_timeout(int(TRIPCOM_RATE_FETCH_INTER_REQUEST_DELAY_SECONDS * 1000))
-                if on_result is not None and results[index] is not None:
-                    item = results[index]
+                        _protection_signalled.set()
+                        for pending in tasks_pool:
+                            pending.cancel()
+                    else:
+                        diagnostics = {
+                            "hotel_id": hotel_id,
+                            "rate_fetch_mode": "in_page_fetch",
+                            "rate_response_status": status,
+                        }
+                        status_out, inventory, error_type, error_message = _classify_tripcom_rate_response(
+                            status, payload, body_wait_error=None,
+                            response_body_timeout=None,
+                            source_hotel_id=hotel_id,
+                            check_in=str(hotel.get("check_in")), check_out=str(hotel.get("check_out")),
+                            adults=int(hotel.get("adults", 2)),
+                            children_count=int(hotel.get("children_count", 0) or 0),
+                        )
+                        item = {
+                            "source_hotel_id": hotel_id,
+                            "status": status_out,
+                            "operation": "tripcom_detail_rate_inventory",
+                            "attempt": 1, "retry_count": 0,
+                            "rate_status": status,
+                            "latency_ms": round((time.perf_counter() - started) * 1000),
+                        }
+                        if inventory is not None:
+                            item["inventory"] = inventory
+                            diagnostics["rate_count"] = len(inventory.get("rates", []))
+                        if error_type:
+                            item["error_type"] = error_type
+                        if error_message:
+                            item["error_message"] = error_message
+                        item["diagnostics"] = diagnostics
+                results[index] = item
+                if on_result is not None:
                     if item.get("status") not in {"ok", "no_rates", "rate_inventory_absent"}:
                         item.setdefault("error_type", item.get("reason") or item.get("status") or "error")
                         item.setdefault("error_message", item.get("reason") or item.get("status") or "Enrichment failed")
