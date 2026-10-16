@@ -808,6 +808,7 @@ def _read_search(
                     # (physicRoomMap.pictureInfo) - previously unreachable
                     # without opening hotel detail pages.
                     "images": rate.get("room_images"),
+                    "room_area": rate.get("room_area"),
                     "rates": [],
                 })
                 room_option["rates"].append(rate)
@@ -959,6 +960,11 @@ def _read_search(
                 "nearby_places": _safe_json_list(row["nearby_places_json"]),
                 "amenities": persisted_amenities,
                 "offer_tags": raw_hotel.get("offer_tags"),
+                # 2026-10-16: list-XHR facts - per-category ratings, nearby
+                # landmarks text, bed type.
+                "rating_subscores": raw_hotel.get("rating_subscores"),
+                "landmarks_desc": raw_hotel.get("landmarks_desc"),
+                "bed_type": raw_hotel.get("bed_type"),
                 "room_options": list(room_options_by_id.values()), "room_rates": room_rates,
                 "property_details": property_details,
                 "review_url": property_details.get("review_url") if property_details else None,

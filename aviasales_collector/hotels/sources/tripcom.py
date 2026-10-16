@@ -966,6 +966,36 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                                         tag_titles.append(tag["tagTitle"].strip())
                             if tag_titles:
                                 facts["offer_tags"] = tag_titles[:6]
+                        # Bed type from the list payload (roomInfo[0].bedInfo.contentList);
+                        # the DOM/detail path is forbidden, the list XHR carries it.
+                        for room_entry in (item.get("roomInfo") or []):
+                            if not isinstance(room_entry, dict):
+                                continue
+                            content_list = (room_entry.get("bedInfo") or {}).get("contentList")
+                            if isinstance(content_list, list) and content_list                                     and isinstance(content_list[0], str) and content_list[0].strip():
+                                facts["bed_type"] = content_list[0].strip()[:120]
+                                break
+                        # 2026-10-16: subScore carries per-category ratings
+                        # (Чистота/Удобства/Местоположение/Сервис) straight
+                        # from the list XHR; positionDesc names the landmarks
+                        # nearby; bedInfo.contentList is the bed type (the
+                        # DOM path needed detail pages).
+                        if isinstance(comment_info_sub := hotel_info.get("commentInfo"), dict) and isinstance(comment_info_sub.get("subScore"), list):
+                            sub_scores: list[dict[str, Any]] = []
+                            for sub in comment_info_sub["subScore"]:
+                                if isinstance(sub, dict) and isinstance(sub.get("content"), str)                                         and isinstance(sub.get("number"), (str, int, float)):
+                                    try:
+                                        value = float(str(sub["number"]).replace(",", "."))
+                                    except (TypeError, ValueError):
+                                        continue
+                                    if 0 < value <= 10:
+                                        sub_scores.append({"name": sub["content"].strip(),
+                                                           "score": value})
+                            if sub_scores:
+                                facts["rating_subscores"] = sub_scores[:6]
+                        position_info_desc = (hotel_info.get("positionInfo") or {})
+                        if isinstance(position_info_desc, dict)                                 and isinstance(position_info_desc.get("positionDesc"), str)                                 and position_info_desc["positionDesc"].strip():
+                            facts["landmarks_desc"] = position_info_desc["positionDesc"].strip()[:240]
                         comment_info = hotel_info.get("commentInfo")
                         if isinstance(comment_info, dict):
                             score_text = str(comment_info.get("commentScore") or "")
@@ -1316,6 +1346,12 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                                                            for url in facts["images"]]
                                 if facts.get("offer_tags"):
                                     raw_hotel["offer_tags"] = facts["offer_tags"]
+                                if facts.get("rating_subscores") and not raw_hotel.get("rating_subscores"):
+                                    raw_hotel["rating_subscores"] = facts["rating_subscores"]
+                                if facts.get("landmarks_desc") and not raw_hotel.get("landmarks_desc"):
+                                    raw_hotel["landmarks_desc"] = facts["landmarks_desc"]
+                                if facts.get("bed_type") and not raw_hotel.get("bed_type"):
+                                    raw_hotel["bed_type"] = facts["bed_type"]
                             target[str(raw_hotel["id"])] = raw_hotel
                         else:
                             card_parse_diagnostics["skipped"] += 1

@@ -180,7 +180,19 @@ def normalize_tripcom_rate_inventory(payload: Any, *, source_hotel_id: str,
         # sub-titles / wifiInfo) - Wi-Fi, air conditioning, view, kettle.
         # Extract them without opening any detail page.
         physical_room_amenities: list[str] | None = None
+        physical_room_area: str | None = None
+        physical_room_bed: str | None = None
         if isinstance(physical_room, dict):
+            # Room area ("12 м²") as its own field; the generic amenity
+            # filter strips it from facility titles, losing the fact.
+            area_title = (physical_room.get("areaInfo") or {}).get("title")                 if isinstance(physical_room.get("areaInfo"), dict) else None
+            if isinstance(area_title, str) and re.match(r"^\d+", area_title.strip()):
+                physical_room_area = area_title.strip()[:24]
+            # Bed type from the rate payload (physicRoomMap.bedInfo.title /
+            # bedDetail.detail) - the list XHR bedInfo also exists, this
+            # covers rate-only hotels.
+            bed_title = (physical_room.get("bedInfo") or {}).get("title")                 if isinstance(physical_room.get("bedInfo"), dict) else None
+            physical_room_bed: str | None = bed_title.strip()[:120]                 if isinstance(bed_title, str) and bed_title.strip() else None
             facility_titles: list[str] = []
             for facility in (physical_room.get("physicalFacilityList")
                              or physical_room.get("newPhysicalFacilityList") or []):
@@ -227,6 +239,8 @@ def normalize_tripcom_rate_inventory(payload: Any, *, source_hotel_id: str,
                 physical_room_amenities or
                 text_items(rate.get("roomFacilityList"), "title") or None,
             "room_images": physical_room_images or None,
+            "room_area": physical_room_area,
+            "bed_type": room_detail.get("bed_type") or physical_room_bed,
             # 2026-10-16: scarcity and discount facts from the same rate
             # payload - remainRoomQuantity (осталось N номеров) and the
             # strikethrough pre-discount price.

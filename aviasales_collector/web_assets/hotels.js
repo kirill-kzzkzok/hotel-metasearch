@@ -1277,7 +1277,7 @@ function openRoomsModal(hotel, nights) {
       }
       for (const row of offers) {
         const block = document.createElement("article"); block.className = "room-modal-row";
-        const details = [row.bed_type,
+        const details = [row.bed_type, row.room_area,
           row.occupancy?.adults ? `${row.occupancy.adults} ${plural(row.occupancy.adults, "гость", "гостя", "гостей")}` : null]
           .filter(Boolean);
         if (details.length) addText(block, "room-modal-meta", details.join(" · "));
@@ -1612,6 +1612,18 @@ function render(data) {
     reviews.textContent = reviewText;
     if (reviewUrl) { reviews.href = reviewUrl; reviews.target = "_blank"; reviews.rel = "noopener noreferrer"; reviews.title = "Открыть отзывы у источника"; }
     meta.append(reviews);
+    const subScores = hotel.rating_subscores || [];
+    if (subScores.length) {
+      const subLine = document.createElement("div"); subLine.className = "subscores";
+      for (const sub of subScores.slice(0, 4)) {
+        const bar = document.createElement("span"); bar.className = "subscore";
+        const label = document.createElement("i"); label.textContent = `${sub.name} ${Number(sub.score).toFixed(1)}`;
+        const fill = document.createElement("b");
+        fill.style.width = `${Math.min(100, Math.round(Number(sub.score) * 10))}%`;
+        bar.append(label, fill); subLine.append(bar);
+      }
+      meta.append(subLine);
+    }
     if (hotel.review_stats?.length > 1) {
       const sources = hotel.review_stats.filter((item) => Number(item?.rating) > 0 && item.source !== review?.source)
         .map((item) => `${sourceLabels[item.source] || item.source}: ${Number(item.rating).toFixed(1)}${item.rating_scale ? `/${item.rating_scale}` : ""}${Number(item.reviews_count) > 0 ? ` · ${Number(item.reviews_count).toLocaleString("ru-RU")}` : ""}`);
@@ -1695,6 +1707,7 @@ function render(data) {
       addText(context, "geo-distance-line",
         `📍 ${formatDistance(Number(osmLandmarkValue))} до ${place.name || "достопримечательности"} · OpenStreetMap`);
     }
+    if (hotel.landmarks_desc) addText(context, "landmarks-line", `📍 ${hotel.landmarks_desc}`);
     if (hotel.address) addText(context, "address", hotel.address);
     const amenities = hotelAmenities(hotel);
     const amenityLine = document.createElement("div"); amenityLine.className = "amenities-line";

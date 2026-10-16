@@ -521,6 +521,13 @@ def normalize_hotel(item: dict[str, Any], observed_at: str | None = None,
         # badges without any detail-page visit.
         "offer_tags": [str(t) for t in item.get("offer_tags") or []
                        if isinstance(t, str) and t.strip()][:6] or None,
+        "rating_subscores": [sub for sub in item.get("rating_subscores") or []
+                             if isinstance(sub, dict) and isinstance(sub.get("name"), str)
+                             and isinstance(sub.get("score"), (int, float))][:6] or None,
+        "landmarks_desc": (str(item.get("landmarks_desc")).strip()[:240]
+                           if isinstance(item.get("landmarks_desc"), str) else None),
+        "bed_type": (str(item.get("bed_type")).strip()[:120]
+                     if isinstance(item.get("bed_type"), str) and item.get("bed_type").strip() else None),
         "amenities": extract_amenities(item),
         **hotel_breakfast,
         "offers": offers, "observed_at": observed_at or utc_now(), "canonical_hotel_id": None,
