@@ -932,6 +932,40 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                                 titles = titles[:12]
                                 if titles:
                                     facts["amenities"] = titles
+                        # 2026-10-16: hotelImages.multiImgs carries the same
+                        # gallery the list page renders (5 photos per hotel,
+                        # higher resolution than the card thumbnails).
+                        hotel_images = hotel_info.get("hotelImages")
+                        if isinstance(hotel_images, dict):
+                            multi = hotel_images.get("multiImgs")
+                            if isinstance(multi, list):
+                                image_urls: list[str] = []
+                                for entry in multi:
+                                    if isinstance(entry, dict) and isinstance(entry.get("url"), str)                                             and entry["url"].startswith(("http://", "https://")):
+                                        image_urls.append(entry["url"][:512])
+                                image_urls = list(dict.fromkeys(image_urls))[:10]
+                                if image_urls:
+                                    facts["images"] = image_urls
+                        # 2026-10-16: roomTags.encourageTags carry scarcity
+                        # ("По этой цене осталось всего 4") and advantageTags
+                        # carry "Бесплатная отмена" / "Поздний выезд" straight
+                        # from the list payload.
+                        room_info_tags = {}
+                        for room_entry in (item.get("roomInfo") or []):
+                            if not isinstance(room_entry, dict):
+                                continue
+                            tags = room_entry.get("roomTags")
+                            if isinstance(tags, dict):
+                                room_info_tags = tags
+                                break
+                        if room_info_tags:
+                            tag_titles = []
+                            for tag_key in ("advantageTags", "encourageTags"):
+                                for tag in (room_info_tags.get(tag_key) or []):
+                                    if isinstance(tag, dict) and isinstance(tag.get("tagTitle"), str)                                             and tag["tagTitle"].strip():
+                                        tag_titles.append(tag["tagTitle"].strip())
+                            if tag_titles:
+                                facts["offer_tags"] = tag_titles[:6]
                         comment_info = hotel_info.get("commentInfo")
                         if isinstance(comment_info, dict):
                             score_text = str(comment_info.get("commentScore") or "")
@@ -1277,6 +1311,11 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                                     raw_hotel["reviews_count"] = facts["reviews_count"]
                                 if facts.get("amenities") and not raw_hotel.get("amenities"):
                                     raw_hotel["amenities"] = facts["amenities"]
+                                if facts.get("images") and not raw_hotel.get("images"):
+                                    raw_hotel["images"] = [{"url": url, "source": "trip_com", "role": "hotel_photo"}
+                                                           for url in facts["images"]]
+                                if facts.get("offer_tags"):
+                                    raw_hotel["offer_tags"] = facts["offer_tags"]
                             target[str(raw_hotel["id"])] = raw_hotel
                         else:
                             card_parse_diagnostics["skipped"] += 1

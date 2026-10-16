@@ -804,6 +804,10 @@ def _read_search(
                     "room_group_index": rate.get("room_group_index"),
                     "room_type": rate.get("room_type"),
                     "amenities": rate.get("room_amenities"),
+                    # 2026-10-16: per-room photo gallery from the rate payload
+                    # (physicRoomMap.pictureInfo) - previously unreachable
+                    # without opening hotel detail pages.
+                    "images": rate.get("room_images"),
                     "rates": [],
                 })
                 room_option["rates"].append(rate)
@@ -815,9 +819,10 @@ def _read_search(
             # the property layer for cards whose sources carry no policy.
             sravni_page_facts: dict[str, Any] | None = None
             for detail in provider_details:
-                if detail.get("source") == "sravniotel_hotel_page_html":
+                if detail.get("source") in ("sravniotel_hotel_api", "sravniotel_hotel_page_html"):
                     sravni_page_facts = detail
-                    break
+                    if detail.get("source") == "sravniotel_hotel_api":
+                        break
             if sravni_page_facts and isinstance(property_details, dict):
                 property_details = {**sravni_page_facts, **property_details}
             elif sravni_page_facts:
@@ -953,6 +958,7 @@ def _read_search(
                 "images": images,
                 "nearby_places": _safe_json_list(row["nearby_places_json"]),
                 "amenities": persisted_amenities,
+                "offer_tags": raw_hotel.get("offer_tags"),
                 "room_options": list(room_options_by_id.values()), "room_rates": room_rates,
                 "property_details": property_details,
                 "review_url": property_details.get("review_url") if property_details else None,

@@ -1217,7 +1217,9 @@ function roomOfferRows(hotel) {
   for (const option of knownRoomInventory(hotel)) {
     for (const rate of Array.isArray(option?.rates) ? option.rates : []) {
       append(rate, {room_type: option.room_type, bed_type: option.bed_type,
-        room_amenities: option.amenities, provider: "trip.com", source: "trip_com"});
+        room_amenities: option.amenities, room_images: option.images || null,
+        rooms_left: rate.rooms_left ?? null, original_price_display: rate.original_price_display || null,
+        provider: "trip.com", source: "trip_com"});
     }
   }
   return rows.filter((row) => isKnownRoomType(row.room_type)
@@ -1255,6 +1257,24 @@ function openRoomsModal(hotel, nights) {
     for (const [roomType, offers] of groups) {
       const group = document.createElement("section"); group.className = "room-type-group";
       addText(group, "room-type-heading", roomType);
+      // 2026-10-16: per-room photo gallery (rate payload physicRoomMap) and
+      // the strikethrough pre-discount price + rooms-left scarcity.
+      const roomImages = (offers.find((row) => Array.isArray(row.room_images) && row.room_images.length)?.room_images) || [];
+      if (roomImages.length) {
+        const gallery = document.createElement("div"); gallery.className = "room-modal-gallery";
+        roomImages.slice(0, 5).forEach((url, index) => {
+          const img = document.createElement("img");
+          img.src = url; img.alt = `${roomType} — фото ${index + 1}`; img.loading = "lazy";
+          img.decoding = "async"; img.className = "room-modal-photo";
+          gallery.append(img);
+        });
+        group.append(gallery);
+      }
+      const scarcity = offers.find((row) => Number(row.rooms_left) > 0)?.rooms_left;
+      if (Number(scarcity) > 0 && Number(scarcity) <= 9) {
+        addText(group, "room-modal-scarcity",
+          `Осталось ${scarcity} ${plural(Number(scarcity), "номер", "номера", "номеров")} по этой цене`);
+      }
       for (const row of offers) {
         const block = document.createElement("article"); block.className = "room-modal-row";
         const details = [row.bed_type,
@@ -1264,6 +1284,10 @@ function openRoomsModal(hotel, nights) {
         const line = document.createElement("div"); line.className = "room-modal-rate";
         const numericAmount = row.amount ?? row.price_amount;
         const rawPrice = row.price_display_text || formatMoney(numericAmount, row.currency);
+        if (row.original_price_display && row.original_price_display !== rawPrice) {
+          const old = document.createElement("span"); old.className = "room-modal-price-old";
+          old.textContent = row.original_price_display; line.append(old);
+        }
         addText(line, "room-modal-price", rawPrice);
         const meal = mealPresentation(row, mealLabels);
         if (meal) addText(line, "room-modal-meta", meal);
@@ -1593,6 +1617,12 @@ function render(data) {
         .map((item) => `${sourceLabels[item.source] || item.source}: ${Number(item.rating).toFixed(1)}${item.rating_scale ? `/${item.rating_scale}` : ""}${Number(item.reviews_count) > 0 ? ` · ${Number(item.reviews_count).toLocaleString("ru-RU")}` : ""}`);
       if (sources.length) addText(meta, "secondary-rating", sources.join(" · "));
     }
+    const offerTags = (hotel.offer_tags || []).filter(Boolean).slice(0, 3);
+    const scarcityTag = offerTags.find((tag) => /осталось всего \d+|по этой цене/i.test(tag));
+    if (scarcityTag) {
+      const scarcity = document.createElement("div"); scarcity.className = "scarcity-line";
+      scarcity.textContent = scarcityTag; main.append(scarcity);
+    }
     main.append(meta);
     const context = document.createElement("div"); context.className = "hotel-context";
     if (data.query?.check_in && data.query?.check_out) {
@@ -1687,6 +1717,10 @@ function render(data) {
     if (policy.checkIn || policy.checkOut) {
       addText(context, "policy-line",
         `Заезд ${policy.checkIn || "не указан"} · Выезд ${policy.checkOut || "не указан"}`);
+    }
+    const earlyLateTags = (hotel.offer_tags || []).filter((tag) => /(?:поздний выезд|ранний заезд|late check|early check)/i.test(tag));
+    if (earlyLateTags.length) {
+      addText(context, "offer-tag-line", earlyLateTags.join(" · "));
     }
     if (hotel.review_summary?.phrases?.length) {
       const themeNames = {location: "расположение", cleanliness: "чистота", breakfast: "завтрак", staff: "персонал", room: "номера", noise: "шум", bathroom: "ванная", pool: "бассейн", value: "цена и качество"};

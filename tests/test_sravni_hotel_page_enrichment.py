@@ -12,6 +12,7 @@ import json
 import sqlite3
 
 from aviasales_collector.hotels.sravni_detail import (
+    parse_sravni_hotel_api,
     parse_sravni_hotel_page,
     enrich_sravni_hotel_pages,
     lookup_sravni_policy,
@@ -27,6 +28,14 @@ def _make_db(path):
     connection.execute(
         "CREATE TABLE hotel_provider_metadata (search_id TEXT, source TEXT, source_hotel_id TEXT, "
         "provider TEXT, metadata_json TEXT, retrieved_at TEXT)"
+    )
+    connection.execute(
+        "CREATE TABLE hotel_search_session (id TEXT PRIMARY KEY, query_json TEXT, status TEXT, "
+        "total_hotels INTEGER, started_at TEXT, finished_at TEXT)"
+    )
+    connection.execute(
+        "INSERT INTO hotel_search_session(id, query_json, status, total_hotels) VALUES ('s1', ?, 'success', 1)",
+        (json.dumps({"check_in": "2026-11-20", "check_out": "2026-11-23", "adults": 2}),),
     )
     return connection
 
@@ -85,6 +94,9 @@ def test_enrich_persists_policy_and_lookup_reads_it_back(tmp_path, monkeypatch):
     connection.close()
 
     monkeypatch.setattr(
+        "aviasales_collector.hotels.sravni_detail._fetch_hotel_api", lambda *args: None,
+    )
+    monkeypatch.setattr(
         "aviasales_collector.hotels.sravni_detail._fetch_page",
         lambda path: "<html>Заезд с 14:00 Выезд до 12:00 Wi-Fi Парковка</html>",
     )
@@ -122,3 +134,38 @@ def test_enrich_reports_failed_page_honestly(tmp_path, monkeypatch):
     assert result["enriched"] == 0
     assert result["failed"] == 1
     assert lookup_sravni_policy(str(database_path), "s1", "9") is None
+
+
+def test_parse_sravni_hotel_api_extracts_structured_fields():
+    payload = {
+        "hotel": {
+            "check_in_time": "14:00:00",
+            "check_out_time": "12:00:00",
+            "amenity_groups": [
+                {"name": "Самые популярные удобства", "amenities": [
+                    {"name": "Бесплатный Wi-Fi"},
+                    {"name": "Круглосуточная стойка регистрации"},
+                ]},
+                {"name": "Интернет", "amenities": [
+                    {"name": "Бесплатный Wi-Fi"},  # дубль
+                    {"name": "Wi-Fi в номере"},
+                ]},
+            ],
+            "description": [{"title": "Расположение", "paragraphs": ["Отель в центре."]}],
+            "policies": [{"title": "Питание", "paragraphs": ["Завтрак 830 ₽."]}],
+        }
+    }
+    facts = parse_sravni_hotel_api(payload)
+    assert facts["check_in_text"] == "Заезд с 14:00"
+    assert facts["check_out_text"] == "Выезд до 12:00"
+    assert facts["amenities_text"] == ["Бесплатный Wi-Fi", "Круглосуточная стойка регистрации", "Wi-Fi в номере"]
+    assert facts["source"] == "sravniotel_hotel_api"
+    assert "Отель в центре." in facts["description_text"]
+    assert facts["policy_text"]
+
+
+def test_parse_sravni_hotel_api_empty_hotel():
+    facts = parse_sravni_hotel_api({"hotel": {}})
+    assert facts["check_in_text"] is None
+    assert facts["check_out_text"] is None
+    assert facts["amenities_text"] == []

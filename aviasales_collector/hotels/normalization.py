@@ -516,6 +516,11 @@ def normalize_hotel(item: dict[str, Any], observed_at: str | None = None,
         **rating_fields,
         "reviews_count": reviews if isinstance(reviews, int) and not isinstance(reviews, bool) and reviews >= 0 else None,
         "images": images, "nearby_places": item.get("nearby_places") or [],
+        # 2026-10-16: list-API offer tags (scarcity, free cancellation,
+        # late checkout) travel with the hotel; the card renders them as
+        # badges without any detail-page visit.
+        "offer_tags": [str(t) for t in item.get("offer_tags") or []
+                       if isinstance(t, str) and t.strip()][:6] or None,
         "amenities": extract_amenities(item),
         **hotel_breakfast,
         "offers": offers, "observed_at": observed_at or utc_now(), "canonical_hotel_id": None,

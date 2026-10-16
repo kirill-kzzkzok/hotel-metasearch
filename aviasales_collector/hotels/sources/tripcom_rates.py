@@ -170,6 +170,8 @@ def normalize_tripcom_rate_inventory(payload: Any, *, source_hotel_id: str,
                               if isinstance(charge.get(field), str) and charge[field].strip()}
             if allowed_charge:
                 charges.append(allowed_charge)
+        booking_status = rate.get("bookingStatusInfo") if isinstance(rate.get("bookingStatusInfo"), dict) else {}
+        booking_remaining = booking_status.get("remainRoomQuantity")
         physical_room_id = str(rate.get("physicalRoomId") or "")
         room_detail = (room_details or {}).get(physical_room_id) or {}
         physical_room = physical_rooms.get(physical_room_id)
@@ -197,6 +199,15 @@ def normalize_tripcom_rate_inventory(payload: Any, *, source_hotel_id: str,
                             facility_titles.append(sub["title"].strip())
             facility_titles = [t for t in dict.fromkeys(facility_titles) if not re.match(r"^\d+\s*(?:м²|m²|sqm| кв)", t)]
             physical_room_amenities = facility_titles[:24] or None
+        # 2026-10-16: per-room photos ride in the same rate payload
+        # (physicRoomMap[room].pictureInfo[].url) - previously the room image
+        # gallery was unreachable without opening detail pages.
+        physical_room_images: list[str] = []
+        if isinstance(physical_room, dict):
+            for picture in (physical_room.get("pictureInfo") or []):
+                if isinstance(picture, dict) and isinstance(picture.get("url"), str)                         and picture["url"].startswith(("http://", "https://")):
+                    physical_room_images.append(picture["url"][:512])
+            physical_room_images = list(dict.fromkeys(physical_room_images))[:12]
         physical_room_name = physical_room.get("name") if isinstance(physical_room, dict) else None
         physical_room_name = physical_room_name.strip() if isinstance(physical_room_name, str) else None
         rates.append({
@@ -215,6 +226,12 @@ def normalize_tripcom_rate_inventory(payload: Any, *, source_hotel_id: str,
             "room_amenities": room_detail.get("room_amenities") or
                 physical_room_amenities or
                 text_items(rate.get("roomFacilityList"), "title") or None,
+            "room_images": physical_room_images or None,
+            # 2026-10-16: scarcity and discount facts from the same rate
+            # payload - remainRoomQuantity (осталось N номеров) and the
+            # strikethrough pre-discount price.
+            "rooms_left": booking_remaining if isinstance(booking_remaining, int) and 0 < booking_remaining < 100 else None,
+            "original_price_display": price_info.get("deletePrice") if isinstance(price_info.get("deletePrice"), str) else None,
             "meal_raw_text": raw_meal,
             **meal_facts,
             "meal_source": f"trip_com_rate_inventory:{'mealInfo.title' if meal_title else 'saleRoomCategoryList.mealInfo'}"

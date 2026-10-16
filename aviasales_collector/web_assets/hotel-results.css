@@ -118,6 +118,12 @@
 .room-modal-meta{font-size:11px;color:#647678}
 .room-modal-rate{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 0 0}
 .room-modal-price{font-size:14px;font-weight:750;color:#173f3e;white-space:nowrap}
+.room-modal-price-old{font-size:12px;color:#8a9a98;text-decoration:line-through;white-space:nowrap}
+.room-modal-gallery{display:flex;gap:6px;overflow-x:auto;padding:4px 0 2px}
+.room-modal-photo{width:112px;height:74px;object-fit:cover;border-radius:5px;border:1px solid #dfe8e4;background:#f1f4f2}
+.room-modal-scarcity{font-size:11px;color:#a34d3c;font-weight:700;padding:2px 0}
+.scarcity-line{font-size:12px;color:#a34d3c;font-weight:700;padding:1px 0}
+.offer-tag-line{font-size:12px;color:#0f766e;font-weight:650}
 .room-modal-link{font-size:11px;color:#176f66;text-decoration:none;font-weight:650}
 .room-modal-link:hover{text-decoration:underline}
 .card-actions{grid-column:1/-1;display:flex;justify-content:flex-end;padding:0 14px 12px}

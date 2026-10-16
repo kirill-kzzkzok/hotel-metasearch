@@ -16,7 +16,7 @@ Parsed fields per hotel:
   pool, gym, ...).
 
 Results are persisted into hotel_provider_metadata under
-provider='sravniotel' with source='sravniotel_hotel_page_html' so the read
+provider='sravniotel' with source='sravniotel_hotel_api' (HTML fallback: sravniotel_hotel_page_html) so the read
 model can merge the policy times and amenities into the canonical card
 without touching any API response contract.
 """
@@ -29,6 +29,7 @@ import sqlite3
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
@@ -83,6 +84,48 @@ def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
+def parse_sravni_hotel_api(payload: dict[str, Any]) -> dict[str, Any]:
+    """Extract structured facts from the SravniOtel /api/v1/hotel response.
+
+    2026-10-16: the site itself calls GET /api/v1/hotel?geo_id=<hotel id>
+    &check_in&check_out&adults (seen in the hotel page's react-query state);
+    it returns structured check_in_time / check_out_time, amenity_groups
+    (Wi-Fi, reception, transfer, AC, breakfast, pets...), policies and a
+    description. Prefer this API over HTML scraping: same public data,
+    structured, faster, and no page fetch at all.
+    """
+    hotel = payload.get("hotel") if isinstance(payload.get("hotel"), dict) else {}
+    check_in = str(hotel.get("check_in_time") or "").strip() or None
+    check_out = str(hotel.get("check_out_time") or "").strip() or None
+    amenities: list[str] = []
+    for group in hotel.get("amenity_groups") or []:
+        if not isinstance(group, dict):
+            continue
+        for amenity in group.get("amenities") or []:
+            if isinstance(amenity, dict) and isinstance(amenity.get("name"), str)                     and amenity["name"].strip():
+                amenities.append(amenity["name"].strip())
+    # de-duplicate while preserving order
+    amenities = list(dict.fromkeys(amenities))
+    description_paragraphs: list[str] = []
+    for block in hotel.get("description") or []:
+        if isinstance(block, dict):
+            description_paragraphs.extend(
+                str(p) for p in (block.get("paragraphs") or []) if isinstance(p, str) and p.strip())
+    policy_paragraphs: list[str] = []
+    for policy in hotel.get("policies") or []:
+        if isinstance(policy, dict):
+            policy_paragraphs.extend(
+                str(p) for p in (policy.get("paragraphs") or []) if isinstance(p, str) and p.strip())
+    return {
+        "check_in_text": f"Заезд с {check_in[:5]}" if check_in else None,
+        "check_out_text": f"Выезд до {check_out[:5]}" if check_out else None,
+        "amenities_text": amenities,
+        "description_text": " ".join(description_paragraphs)[:600] or None,
+        "policy_text": " ".join(policy_paragraphs)[:600] or None,
+        "source": "sravniotel_hotel_api",
+    }
+
+
 def parse_sravni_hotel_page(html: str) -> dict[str, Any]:
     """Extract public policy/amenity facts from a SravniOtel hotel page."""
     text = re.sub(r"\s+", " ", html_mod.unescape(re.sub(r"<[^>]+>", " ", html)))
@@ -97,7 +140,26 @@ def parse_sravni_hotel_page(html: str) -> dict[str, Any]:
         "check_in_text": f"Заезд с {checkin.group(1)}" if checkin else None,
         "check_out_text": f"Выезд до {checkout.group(1)}" if checkout else None,
         "amenities_text": amenities,
+        "source": "sravniotel_hotel_page_html",
     }
+
+
+def _fetch_hotel_api(source_hotel_id: str, check_in: str, check_out: str, adults: int) -> dict[str, Any] | None:
+    """GET the SravniOtel structured hotel API (no page fetch, no browser)."""
+    query = urllib.parse.urlencode({
+        "geo_id": source_hotel_id, "check_in": check_in, "check_out": check_out, "adults": adults,
+    })
+    request = urllib.request.Request(
+        f"{SRAVNI_BASE}/api/v1/hotel?{query}",
+        headers={"User-Agent": "HotelMetaSearch/0.1 (sravni hotel enrichment)"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=SRAVNI_PAGE_TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+        return payload if isinstance(payload, dict) else None
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        log.info("[SRAVNI_DETAIL] api_fetch_failed hotel=%s error=%s", source_hotel_id, str(exc)[:120])
+        return None
 
 
 def _fetch_page(path: str) -> str | None:
@@ -117,13 +179,18 @@ def _fetch_page(path: str) -> str | None:
 
 def _persist_metadata(database_path: str | Path, search_id: str,
                       source_hotel_id: str, facts: dict[str, Any]) -> None:
+    # The facts carry their own origin (sravniotel_hotel_api for the
+    # structured endpoint, sravniotel_hotel_page_html for the HTML
+    # fallback); fall back to the API label when absent.
+    origin = str(facts.get("source") or "sravniotel_hotel_api")
+    method = "api_get" if origin == "sravniotel_hotel_api" else "http_html_page_parse"
     payload = {
         "provider": "sravniotel",
-        "source": "sravniotel_hotel_page_html",
-        "method": "http_html_page_parse",
+        "source": origin,
+        "method": method,
         "confidence": "high",
         "retrieved_at": _utc_timestamp(),
-        **facts,
+        **{k: v for k, v in facts.items() if k != "source"},
     }
     with closing(_connect(database_path)) as connection:
         connection.execute(
@@ -158,6 +225,17 @@ def _load_sravni_hotels(database_path: str | Path, search_id: str) -> list[dict[
     return hotels
 
 
+def _load_search_query(database_path: str | Path, search_id: str) -> dict[str, Any]:
+    with closing(_connect(database_path)) as connection:
+        row = connection.execute(
+            "SELECT query_json FROM hotel_search_session WHERE id=?", (search_id,),
+        ).fetchone()
+    if not row or not row[0]:
+        return {}
+    payload = json.loads(row[0]) if isinstance(row[0], str) else {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _has_metadata(database_path: str | Path, search_id: str, source_hotel_id: str) -> bool:
     with closing(_connect(database_path)) as connection:
         row = connection.execute(
@@ -181,10 +259,21 @@ def enrich_sravni_hotel_pages(database_path: str | Path, search_id: str,
     hotels = _load_sravni_hotels(database_path, search_id)
     pending = [hotel for hotel in hotels[:limit]
                if not _has_metadata(database_path, search_id, hotel["source_hotel_id"])]
+    query = _load_search_query(database_path, search_id)
+    check_in = str(query.get("check_in") or "")
+    check_out = str(query.get("check_out") or "")
+    adults = int(query.get("adults") or 2)
     enriched = 0
     failed = 0
     if pending:
         def work(hotel: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+            # Preferred: the structured /api/v1/hotel endpoint (the same call
+            # the hotel page itself makes). Fallback: HTML page parse.
+            payload = _fetch_hotel_api(hotel["source_hotel_id"], check_in, check_out, adults)
+            if payload is not None:
+                facts = parse_sravni_hotel_api(payload)
+                if facts.get("check_in_text") or facts.get("amenities_text"):
+                    return hotel, facts
             html = _fetch_page(hotel["path"])
             return hotel, (parse_sravni_hotel_page(html) if html else None)
 
