@@ -528,6 +528,12 @@ def normalize_hotel(item: dict[str, Any], observed_at: str | None = None,
                            if isinstance(item.get("landmarks_desc"), str) else None),
         "bed_type": (str(item.get("bed_type")).strip()[:120]
                      if isinstance(item.get("bed_type"), str) and item.get("bed_type").strip() else None),
+        "name_en": (str(item.get("name_en")).strip()[:160]
+                    if isinstance(item.get("name_en"), str) and item.get("name_en").strip() else None),
+        "rating_description": (str(item.get("rating_description")).strip()[:80]
+                               if isinstance(item.get("rating_description"), str) and item.get("rating_description").strip() else None),
+        "review_summary_line": (str(item.get("review_summary_line")).strip()[:160]
+                                if isinstance(item.get("review_summary_line"), str) and item.get("review_summary_line").strip() else None),
         "amenities": extract_amenities(item),
         **hotel_breakfast,
         "offers": offers, "observed_at": observed_at or utc_now(), "canonical_hotel_id": None,

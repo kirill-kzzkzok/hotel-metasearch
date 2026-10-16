@@ -979,6 +979,8 @@ def _read_search(
                 "rating_subscores": raw_hotel.get("rating_subscores"),
                 "landmarks_desc": raw_hotel.get("landmarks_desc"),
                 "bed_type": raw_hotel.get("bed_type"),
+                "name_en": raw_hotel.get("name_en"),
+                "rating_description": raw_hotel.get("rating_description"),
                 # 2026-10-17: review facts from the comment endpoint XHR
                 # (rating subscores / level / tags) - merged from the rate
                 # payload's review_info.

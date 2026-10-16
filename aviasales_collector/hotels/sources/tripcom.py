@@ -994,10 +994,33 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                             if sub_scores:
                                 facts["rating_subscores"] = sub_scores[:6]
                         position_info_desc = (hotel_info.get("positionInfo") or {})
-                        if isinstance(position_info_desc, dict)                                 and isinstance(position_info_desc.get("positionDesc"), str)                                 and position_info_desc["positionDesc"].strip():
-                            facts["landmarks_desc"] = position_info_desc["positionDesc"].strip()[:240]
+                        if isinstance(position_info_desc, dict):
+                            desc_text = position_info_desc.get("positionDesc")
+                            if isinstance(desc_text, str) and desc_text.strip():
+                                facts["landmarks_desc"] = desc_text.strip()[:240]
+                            # 2026-10-17: enName enables cross-source name
+                            # matching; positionDescs[] lists the landmarks
+                            # in order.
+                            name_info = hotel_info.get("nameInfo")
+                            if isinstance(name_info, dict)                                     and isinstance(name_info.get("enName"), str)                                     and name_info["enName"].strip():
+                                facts["name_en"] = name_info["enName"].strip()[:160]
+                            descs = position_info_desc.get("positionDescs")
+                            if isinstance(descs, list) and not facts.get("landmarks_desc"):
+                                names = [str(x).strip() for x in descs
+                                         if isinstance(x, str) and x.strip()]
+                                if names:
+                                    facts["landmarks_desc"] = " | ".join(names[:6])[:240]
                         comment_info = hotel_info.get("commentInfo")
                         if isinstance(comment_info, dict):
+                            # 2026-10-17: commentDescription is the verbal
+                            # verdict ('Потрясающе'); oneSentenceComment is a
+                            # one-line guest summary.
+                            comment_description = comment_info.get("commentDescription")
+                            if isinstance(comment_description, str) and comment_description.strip():
+                                facts["rating_description"] = comment_description.strip()[:80]
+                            sentence = comment_info.get("oneSentenceComment")
+                            if isinstance(sentence, dict)                                     and isinstance(sentence.get("tagTitle"), str)                                     and sentence["tagTitle"].strip():
+                                facts["review_summary_line"] = sentence["tagTitle"].strip()[:160]
                             score_text = str(comment_info.get("commentScore") or "")
                             try:
                                 score = float(score_text.replace(",", "."))
@@ -1352,6 +1375,12 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                                     raw_hotel["landmarks_desc"] = facts["landmarks_desc"]
                                 if facts.get("bed_type") and not raw_hotel.get("bed_type"):
                                     raw_hotel["bed_type"] = facts["bed_type"]
+                                if facts.get("name_en") and not raw_hotel.get("name_en"):
+                                    raw_hotel["name_en"] = facts["name_en"]
+                                if facts.get("rating_description") and not raw_hotel.get("rating_description"):
+                                    raw_hotel["rating_description"] = facts["rating_description"]
+                                if facts.get("review_summary_line") and not raw_hotel.get("review_summary_line"):
+                                    raw_hotel["review_summary_line"] = facts["review_summary_line"]
                             target[str(raw_hotel["id"])] = raw_hotel
                         else:
                             card_parse_diagnostics["skipped"] += 1

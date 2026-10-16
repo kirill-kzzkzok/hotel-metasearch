@@ -94,6 +94,11 @@ def normalize_tripcom_rate_inventory(payload: Any, *, source_hotel_id: str,
     rate_to_group: dict[str, int] = {}
     room_list = data.get("roomList")
     if isinstance(room_list, list):
+        # 2026-10-17: saleRoomMap keys are '<sRoomId>_<roomToken>' (or a
+        # full skey), while subRoomList carries the bare sRoomId/skey.
+        # Matching only the bare id missed EVERY rate (0/22, 0/20 live) -
+        # room_group_index was None for all. Match the full skey first,
+        # then the '<sRoomId>_' prefix, then the bare id.
         for index, room in enumerate(room_list):
             if not isinstance(room, dict):
                 continue
@@ -103,9 +108,12 @@ def normalize_tripcom_rate_inventory(payload: Any, *, source_hotel_id: str,
                 for subroom in subrooms:
                     if not isinstance(subroom, dict):
                         continue
-                    rate_id = subroom.get("sRoomId")
-                    if isinstance(rate_id, (str, int)) and not isinstance(rate_id, bool):
-                        rate_id = str(rate_id)
+                    sub_keys = []
+                    for field in ("skey", "key", "sRoomId"):
+                        value = subroom.get(field)
+                        if isinstance(value, (str, int)) and not isinstance(value, bool):
+                            sub_keys.append(str(value))
+                    for rate_id in dict.fromkeys(sub_keys):
                         group["rate_ids"].append(rate_id)
                         rate_to_group[rate_id] = index
             room_groups.append(group)
@@ -133,6 +141,15 @@ def normalize_tripcom_rate_inventory(payload: Any, *, source_hotel_id: str,
         rate_id = str(map_id).strip() if map_id is not None else ""
         if not rate_id or len(rate_id) > 256 or any(ord(character) < 32 for character in rate_id):
             continue
+        # Resolve the saleRoomMap key ('<sRoomId>_<token>' or full skey) to
+        # its room group: exact skey match, else '<sRoomId>_' prefix, else
+        # the bare id. Without this every rate lands in no group.
+        group_index = rate_to_group.get(rate_id)
+        if group_index is None:
+            for sub_key, idx in rate_to_group.items():
+                if rate_id.startswith(f"{sub_key}_") or sub_key.startswith(f"{rate_id}_"):
+                    group_index = idx
+                    break
         meal_info = rate.get("mealInfo") if isinstance(rate.get("mealInfo"), dict) else {}
         meal_title = meal_info.get("title") if isinstance(meal_info.get("title"), str) else None
         categories = rate.get("saleRoomCategoryList")
@@ -228,7 +245,7 @@ def normalize_tripcom_rate_inventory(payload: Any, *, source_hotel_id: str,
             "provider_rate_record_id": str(rate.get("id")) if rate.get("id") is not None else None,
             "provider_room_id": str(rate.get("physicalRoomId"))
                 if str(rate.get("physicalRoomId") or "").isdigit() else None,
-            "room_group_index": rate_to_group.get(rate_id),
+            "room_group_index": group_index,
             "check_in": check_in, "check_out": check_out, "adults": adults,
             "children_count": children_count,
             "room_type": room_detail.get("room_type") or physical_room_name or next(
