@@ -860,9 +860,15 @@ function startTripcomBackgroundEnrichment(data) {
   const inFlightIds = new Set(tripRecords
     .filter((record) => tripcomInFlightHotels.has(requestKey(String(record.source_hotel_id))))
     .map((record) => String(record.source_hotel_id)));
+  // 2026-10-17: a previous pool crash leaves status='queued' rows in the
+  // DB (written before the browser pool starts). 'queued' is not a terminal
+  // status, so hotelReadyForRender would wait forever; the backend treats
+  // queued rows as retryable, so include them in the next enrichment POST.
   const pending = tripRecords.filter((record) => {
     const id = String(record.source_hotel_id);
-    return !record.room_rate_enrichment_status
+    const status = String(record.room_rate_enrichment_status || "").toLowerCase();
+    const retryable = !status || status === "queued" || status === "running";
+    return retryable
       && !tripcomAutoCompleted.has(requestKey(id))
       && !tripcomInFlightHotels.has(requestKey(id));
   });

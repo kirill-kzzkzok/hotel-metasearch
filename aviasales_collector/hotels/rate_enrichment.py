@@ -224,6 +224,16 @@ async def enrich_tripcom_room_rates(
                 "rates": [],
             }
         property_details = outcome.get("property_details")
+        # 2026-10-17: review facts (comment endpoint) ride on the outcome;
+        # persist them inside property_details_json so the read model (which
+        # merges property_details into the card) actually sees them.
+        review_info = outcome.get("review_info")
+        if isinstance(review_info, dict) and review_info:
+            if isinstance(property_details, dict):
+                property_details = {**property_details, **{
+                    k: v for k, v in review_info.items() if v is not None}}
+            else:
+                property_details = dict(review_info)
         # Keep SQLite writes serialized while allowing the Playwright pages
         # to continue loading independently. The search API can expose each
         # terminal hotel immediately instead of waiting for the whole pool.
