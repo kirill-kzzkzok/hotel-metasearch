@@ -315,6 +315,19 @@ def test_cheapest_sort_recognizes_yo_and_waits_for_tripcom_to_apply_it():
             calls.append(("wait", script, kwargs))
             assert control.selected == "true"
 
+        def locator(self, selector):
+            if selector == "body":
+                return BodyLocator()
+            return ResultLocator()
+
+    class BodyLocator:
+        def inner_text(self, **_kwargs):
+            return "Найдено 48 рейсов"
+
+    class ResultLocator:
+        def count(self):
+            return 1
+
     class EmptyControl:
         first = None
 
@@ -328,6 +341,15 @@ def test_cheapest_sort_recognizes_yo_and_waits_for_tripcom_to_apply_it():
     wait_call = next(call for call in calls if isinstance(call, tuple) and call[0] == "wait")
     assert "node.getAttribute('aria-selected') === 'true'" in wait_call[1]
     assert calls.index("click") < calls.index(wait_call)
+    # 2026-10-14 DOM: the sort click clears the list before re-rendering, so
+    # the sort must also wait for fare cards to re-appear before returning.
+    card_wait = next(
+        call for call in calls
+        if isinstance(call, tuple) and call[0] == "wait"
+        and call[2].get("arg") == trip_flight_compare.TRIP_RESULT_SELECTOR
+    )
+    assert "document.querySelector(selector)" in card_wait[1]
+    assert calls.index(wait_call) < calls.index(card_wait)
 
 
 def test_cheapest_sort_fails_clearly_when_tripcom_does_not_show_it():
@@ -1080,70 +1102,33 @@ def test_real_sync_playwright_starts_inside_tripcom_executor_from_async_loop():
 
 
 @pytest.mark.parametrize(
-    ("empty_first_return", "include_second_outbound"),
-    [(False, True), (True, True), (True, False)],
+    ("include_second_outbound",),
+    [(True,), (False,)],
 )
-def test_round_trip_search_skips_empty_return_and_uses_cheapest_verified_pair(
-    monkeypatch, tmp_path, empty_first_return, include_second_outbound,
+def test_round_trip_search_returns_cheapest_eligible_sorted_card(
+    monkeypatch, tmp_path, include_second_outbound,
 ):
     from playwright import sync_api
 
     context = _context(stops=(0, 1))
     first_outbound = _flight(20000, "2026-10-07", ["SVO", "KGD"], 0)
     second_outbound = _flight(25000, "2026-10-07", ["DME", "KGD"], 0)
-    first_return = _flight(30000, "2026-10-14", ["KGD", "SAW", "VKO"], 1)
-    second_return = _flight(25000, "2026-10-14", ["KGD", "SAW", "VKO"], 1)
-
-    class Button:
-        def __init__(self, page, outbound):
-            self.page = page
-            self.outbound = outbound
-            self.first = self
-
-        def count(self):
-            return 1
-
-        def click(self):
-            self.page.current_outbound = self.outbound
+    third_outbound = _flight(23000, "2026-10-08", ["SVO", "KGD"], 0)
 
     class Card:
-        def __init__(self, page, outbound):
-            self.page = page
-            self.outbound = outbound
-
-        def get_by_role(self, *_args, **_kwargs):
-            return Button(self.page, self.outbound)
-
-    class Locator:
-        def __init__(self):
-            self.first = self
-
-        def wait_for(self, **_kwargs):
-            pass
+        pass
 
     class Page:
-        def __init__(self):
-            self.current_outbound = None
-            self.back_count = 0
-
         def set_default_timeout(self, _timeout):
             pass
 
         def on(self, *_args):
             pass
 
-        def wait_for_url(self, *_args, **_kwargs):
-            pass
-
-        def locator(self, _selector):
-            return Locator()
-
-        def go_back(self, **_kwargs):
-            self.current_outbound = None
-            self.back_count += 1
-
         def close(self):
             pass
+
+        url = "https://ru.trip.com/flights/showfarefirst?dcity=led"
 
     page = Page()
 
@@ -1163,37 +1148,22 @@ def test_round_trip_search_skips_empty_return_and_uses_cheapest_verified_pair(
     monkeypatch.setattr(trip_flight_compare, "_search_form", lambda *_args: None)
     monkeypatch.setattr(trip_flight_compare, "_load_more_results", lambda *_args: None)
     monkeypatch.setattr(trip_flight_compare, "_sort_cheapest", lambda *_args: None)
-    monkeypatch.setattr(
-        trip_flight_compare,
-        "_wait_for_trip_result_list",
-        lambda _page, **_kwargs: not (
-            empty_first_return and page.current_outbound is first_outbound
-        ),
-    )
 
-    def result_cards(_page, _trip_type):
-        if page.current_outbound is None:
-            outbounds = [(first_outbound, Card(page, first_outbound))]
-            if include_second_outbound:
-                outbounds.append((second_outbound, Card(page, second_outbound)))
-            return outbounds
-        returning = first_return if page.current_outbound is first_outbound else second_return
-        return [(returning, None)]
-
-    monkeypatch.setattr(trip_flight_compare, "_result_cards", result_cards)
-
-    if empty_first_return and not include_second_outbound:
-        with pytest.raises(TripFlightCompareError, match="Trip.com показал 0 обратных рейсов"):
-            trip_flight_compare._tripcom_search(context, tmp_path / "profile")
-        assert page.back_count == 1
-        return
+    outbounds = [(first_outbound, Card())]
+    if include_second_outbound:
+        outbounds.append((second_outbound, Card()))
+    outbounds.append((third_outbound, Card()))
+    monkeypatch.setattr(trip_flight_compare, "_result_cards", lambda *_args: outbounds)
 
     actual = trip_flight_compare._tripcom_search(context, tmp_path / "profile")
 
-    assert actual["price"] == 25000
-    assert actual["outbound"] is second_outbound
-    assert actual["return"] is second_return
-    assert page.back_count == 1
+    # The cheapest eligible card (20000) wins; no return-leg page is visited.
+    assert actual["price"] == 20000
+    assert actual["outbound"]["price"] == first_outbound["price"]
+    assert actual["outbound"]["airport_chain"] == first_outbound["airport_chain"]
+    assert actual["return"] is None
+    assert actual["trip_type"] == "RT"
+    assert actual["tripcom_url"] == "https://ru.trip.com/flights/showfarefirst?dcity=led"
 
 
 def test_round_trip_matching_accepts_same_or_better_stops_and_requires_exact_dates_routes():

@@ -1722,6 +1722,15 @@ function render(data) {
     if (earlyLateTags.length) {
       addText(context, "offer-tag-line", earlyLateTags.join(" · "));
     }
+    // 2026-10-16: property description (sravni structured API) - the first
+    // sentences give the location context users scan for.
+    const descriptionText = String(hotel.property_details?.description_text || "").trim();
+    if (descriptionText.length > 40) {
+      const descLine = document.createElement("details"); descLine.className = "hotel-description";
+      const summary = document.createElement("summary"); summary.textContent = "Об отеле";
+      const text = document.createElement("p"); text.textContent = descriptionText.slice(0, 400);
+      descLine.append(summary, text); context.append(descLine);
+    }
     if (hotel.review_summary?.phrases?.length) {
       const themeNames = {location: "расположение", cleanliness: "чистота", breakfast: "завтрак", staff: "персонал", room: "номера", noise: "шум", bathroom: "ванная", pool: "бассейн", value: "цена и качество"};
       const positive = (hotel.review_summary.positive?.length ? hotel.review_summary.positive : hotel.review_summary.mentions || [])
