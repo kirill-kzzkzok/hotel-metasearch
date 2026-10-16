@@ -1146,6 +1146,8 @@ function cardRenderSignature(hotel, index, nights, filters, currency, providers,
       item.rating ?? "", item.reviews_count ?? ""].join(",")).join("|"),
     JSON.stringify(hotel.property_details?.stars ?? null),
     hotel.property_details?.description ? "d" : "",
+    hotel.property_details?.review_level || hotel.review_level || "",
+    JSON.stringify(hotel.property_details?.rating_subscores || hotel.rating_subscores || []),
     (hotel.source_records || []).map((record) => [record.source,
       record.source_hotel_id, record.room_rate_enrichment_status || ""].join(",")).join("|"),
     // 2026-10-16: every NEW rendered field must be in the signature or a
@@ -1624,7 +1626,10 @@ function render(data) {
     reviews.textContent = reviewText;
     if (reviewUrl) { reviews.href = reviewUrl; reviews.target = "_blank"; reviews.rel = "noopener noreferrer"; reviews.title = "Открыть отзывы у источника"; }
     meta.append(reviews);
-    const subScores = hotel.rating_subscores || [];
+    const cardSubscores = hotel.rating_subscores
+      || hotel.property_details?.rating_subscores || [];
+    const reviewLevel = hotel.review_level || hotel.property_details?.review_level;
+    const subScores = cardSubscores;
     if (subScores.length) {
       const subLine = document.createElement("div"); subLine.className = "subscores";
       for (const sub of subScores.slice(0, 4)) {
@@ -1636,6 +1641,7 @@ function render(data) {
       }
       meta.append(subLine);
     }
+    if (reviewLevel) addText(meta, "review-level", reviewLevel);
     if (hotel.review_stats?.length > 1) {
       const sources = hotel.review_stats.filter((item) => Number(item?.rating) > 0 && item.source !== review?.source)
         .map((item) => `${sourceLabels[item.source] || item.source}: ${Number(item.rating).toFixed(1)}${item.rating_scale ? `/${item.rating_scale}` : ""}${Number(item.reviews_count) > 0 ? ` · ${Number(item.reviews_count).toLocaleString("ru-RU")}` : ""}`);

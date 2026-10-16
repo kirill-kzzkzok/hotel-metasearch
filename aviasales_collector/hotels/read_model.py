@@ -828,6 +828,20 @@ def _read_search(
                 property_details = {**sravni_page_facts, **property_details}
             elif sravni_page_facts:
                 property_details = dict(sravni_page_facts)
+            # 2026-10-17: review facts (comment endpoint) ride in the rate
+            # rows' raw_json (review_info); take the newest non-null one.
+            review_info = next((rate.get("review_info") for rate in reversed(room_rates)
+                                if isinstance(rate.get("review_info"), dict)), None)
+            if review_info and isinstance(property_details, dict):
+                property_details = {**property_details,
+                                    "rating_subscores": property_details.get("rating_subscores")
+                                    or review_info.get("rating_subscores"),
+                                    "review_level": review_info.get("review_level"),
+                                    "reviews_total": review_info.get("reviews_total")}
+            elif review_info:
+                property_details = {"rating_subscores": review_info.get("rating_subscores"),
+                                    "review_level": review_info.get("review_level"),
+                                    "reviews_total": review_info.get("reviews_total")}
             detail_coordinates = _coordinate_pair(property_details.get("coordinates")) if property_details else None
             if not provider_coordinates and detail_coordinates:
                 provider_coordinates = detail_coordinates
@@ -965,6 +979,11 @@ def _read_search(
                 "rating_subscores": raw_hotel.get("rating_subscores"),
                 "landmarks_desc": raw_hotel.get("landmarks_desc"),
                 "bed_type": raw_hotel.get("bed_type"),
+                # 2026-10-17: review facts from the comment endpoint XHR
+                # (rating subscores / level / tags) - merged from the rate
+                # payload's review_info.
+                "review_level": review_info.get("review_level") if review_info else None,
+                "reviews_total": review_info.get("reviews_total") if review_info else None,
                 "room_options": list(room_options_by_id.values()), "room_rates": room_rates,
                 "property_details": property_details,
                 "review_url": property_details.get("review_url") if property_details else None,

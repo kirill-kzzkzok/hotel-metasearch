@@ -32,6 +32,20 @@ TRIPCOM_RATE_FETCH_MAX_PAYLOAD_BYTES = 32 * 1024 * 1024
 
 _RATE_FETCH_URL = "https://ru.trip.com" + TRIPCOM_RATE_ENDPOINT_PATH
 
+_COMMENT_JS = """async (hotelId) => {
+  const body = {hotelId: Number(hotelId), sceneTypes: ['CommentList'],
+    commentFilterOptions: {pageIndex: 1, pageSize: 10, repeatComment: 1, orderBy: '0'},
+    head: {platform: 'PC', cver: '0', bu: 'IBU', group: 'trip', locale: 'ru-RU',
+           currency: 'RUB', pageId: '10320668148', extension: []}};
+  try {
+    const r = await fetch('https://ru.trip.com/restapi/soa2/34308/getHotelCommentInfo', {
+      method: 'POST', headers: {'content-type': 'application/json'},
+      body: JSON.stringify(body), credentials: 'include'});
+    const t = await r.text();
+    return {status: r.status, payloadJson: t.slice(0, 400000)};
+  } catch (e) { return {status: 0, payloadJson: ''}; }
+}"""
+
 _FETCH_JS = """async (task) => {
   const body = JSON.parse(JSON.stringify(window.__rateTemplate));
   body.search.hotelId = Number(task.hotelId);
@@ -302,6 +316,40 @@ async def collect_tripcom_room_rates_via_fetch(
                             item["error_message"] = error_message
                         item["diagnostics"] = diagnostics
                 results[index] = item
+                # 2026-10-17: review enrichment via the site's own comment
+                # endpoint (in-page XHR, same as the rate fetch - no detail
+                # pages). One request per hotel, only for successful rates.
+                if item.get("status") == "ok":
+                    comment_page = worker_pages[index % len(worker_pages)]
+                    try:
+                        comment_out = await asyncio.wait_for(
+                            comment_page.evaluate(_COMMENT_JS, hotel_id), timeout=20)
+                        comment_payload = None
+                        if comment_out and comment_out.get("status") == 200 and comment_out.get("payloadJson"):
+                            comment_payload = json.loads(comment_out["payloadJson"])
+                        comment_data = (comment_payload or {}).get("data")                             if isinstance(comment_payload, dict) else None
+                        if isinstance(comment_data, dict):
+                            rating = comment_data.get("commentRating") or {}
+                            subscores = []
+                            for key, label in (("ratingLocation", "Местоположение"),
+                                               ("ratingFacility", "Удобства"),
+                                               ("ratingService", "Сервис"),
+                                               ("ratingRoom", "Чистота")):
+                                value = rating.get(key)
+                                if isinstance(value, (int, float)) and 0 < value <= 10:
+                                    subscores.append({"name": label, "score": float(value)})
+                            review_tags = [
+                                {"name": str(tag.get("name") or ""), "count": int(tag.get("commentCount") or 0)}
+                                for tag in (comment_data.get("commentTagList") or [])
+                                if isinstance(tag, dict) and tag.get("name")]
+                            item["review_info"] = {
+                                "rating_subscores": subscores or None,
+                                "review_level": rating.get("commentLevel"),
+                                "reviews_total": comment_data.get("totalCount"),
+                                "review_tags": review_tags[:8] or None,
+                            }
+                    except Exception:
+                        pass  # Review enrichment is best-effort; rates stay intact.
                 if on_result is not None:
                     if item.get("status") not in {"ok", "no_rates", "rate_inventory_absent"}:
                         item.setdefault("error_type", item.get("reason") or item.get("status") or "error")
