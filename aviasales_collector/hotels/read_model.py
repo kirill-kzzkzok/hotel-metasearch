@@ -963,7 +963,9 @@ def _read_search(
                 "beach_line_source": "source" if normalize_beach_line(
                     raw_hotel.get("beach_line") or raw_hotel.get("beachLine") or raw_hotel.get("beachfront")
                 ) != "unknown" else None,
-                "raw_payload": raw_hotel,
+                # 2026-10-17: raw_payload duplicated the whole hotel dict
+                # in every card (~4KB each, 5.8MB response on 400 cards);
+                # the frontend never reads it - removed from the API shape.
                 "review_quotes": raw_hotel.get("review_quotes") or [],
                 "review_source": raw_hotel.get("review_source"),
                 "source_hotel_url": (

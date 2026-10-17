@@ -290,11 +290,14 @@ async def load_more_sravni_page(
             result["query"]["room_mode"] = requested_mode
             return _finalize_search(database_path, result)
         if not token:
+            # Pagination exhausted: return the already-persisted search.
+            # A full geo re-enrichment here added minutes of Overpass
+            # deadline waits on a degraded evening (measured 192s on the
+            # 400-card search) while adding nothing - the coordinate
+            # stream already enriches cards incrementally.
             result = _read_search(database_path, search_id)
             result["query"]["room_mode"] = requested_mode
-            result = _finalize_search(database_path, result)
-            await _enrich_search_coordinates(database_path, result)
-            return result
+            return _finalize_search(database_path, result)
         page_number = pages_so_far + 1
     log_search_timeline(search_id, "sravni_page_started", page=page_number,
                         delta=delta, elapsed_since_previous_ms=round((time.perf_counter() - request_started) * 1000, 1))
