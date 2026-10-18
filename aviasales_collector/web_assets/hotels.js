@@ -1164,6 +1164,11 @@ function cardRenderSignature(hotel, index, nights, filters, currency, providers,
     (hotel.property_details?.description_text || "").slice(0, 80),
     JSON.stringify(hotel.rating_subscores || []),
     hotel.landmarks_desc || "",
+    // 2026-10-18: verdict/one-line-review are rendered on the card - they
+    // must be in the signature or a refresh with fresh review facts is
+    // skipped as unchanged.
+    hotel.rating_description || hotel.property_details?.rating_description || "",
+    hotel.review_summary_line || "",
     (hotel.offer_tags || []).join(","),
     (hotel.room_options || []).map((option) => [
       (option.images || []).length, option.room_area || "",
@@ -1639,8 +1644,10 @@ function render(data) {
     if (subScores.length) {
       const subLine = document.createElement("div"); subLine.className = "subscores";
       for (const sub of subScores.slice(0, 4)) {
+        const score = Number(sub?.score);
+        if (!Number.isFinite(score) || score <= 0) continue;  // guard: no "0.0" placeholders
         const bar = document.createElement("span"); bar.className = "subscore";
-        const label = document.createElement("i"); label.textContent = `${sub.name} ${Number(sub.score).toFixed(1)}`;
+        const label = document.createElement("i"); label.textContent = `${sub.name} ${score.toFixed(1)}`;
         const fill = document.createElement("b");
         fill.style.width = `${Math.min(100, Math.round(Number(sub.score) * 10))}%`;
         bar.append(label, fill); subLine.append(bar);

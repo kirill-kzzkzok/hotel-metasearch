@@ -291,6 +291,14 @@ def enrich_sravni_hotel_pages(database_path: str | Path, search_id: str,
                                     hotel["source_hotel_id"], str(exc)[:120])
                 else:
                     failed += 1
+                    # Negative marker: a broken/404 page used to be retried
+                    # on every enrichment cycle. Skip it for an hour.
+                    try:
+                        _persist_metadata(database_path, search_id, hotel["source_hotel_id"],
+                                          {"source": "sravniotel_failed_pages",
+                                           "retrieved_at": _utc_timestamp()})
+                    except sqlite3.OperationalError:
+                        pass
     elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
     log.info("[SRAVNI_DETAIL] search=%s hotels=%d pending=%d enriched=%d failed=%d elapsed_ms=%s",
              search_id, len(hotels), len(pending), enriched, failed, elapsed_ms)
@@ -311,4 +319,9 @@ def lookup_sravni_policy(database_path: str | Path, search_id: str,
     if not row:
         return None
     payload = json.loads(row[0]) if row[0] else None
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    # The negative failure marker is bookkeeping, not hotel facts.
+    if payload.get("source") == "sravniotel_failed_pages":
+        return None
+    return payload
