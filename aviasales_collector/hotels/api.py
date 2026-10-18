@@ -374,6 +374,7 @@ def build_router(database_path: str | Path) -> APIRouter:
                 hotels_for_stream = stream_result["hotels"]
                 total = len(hotels_for_stream)
                 end = min(total, offset + (batch_limit or 0))
+                geo_update_tasks: list = []
                 for start in range(offset, end, batch_size):
                     stop = min(end, start + batch_size)
                     batch_started = time.perf_counter()
@@ -432,10 +433,15 @@ def build_router(database_path: str | Path) -> APIRouter:
                         bytes=len(line.encode("utf-8")),
                     )
                     yield line
-                    # Phase 2 (update pass): full geo stages for the same
-                    # batch - beach/metro/airport distances that depend on
-                    # Overpass. Frontend's render-signature cache re-renders
-                    # only the cards whose fields changed.
+                    # 2026-10-18: phase-2 (Overpass) of batch N used to run
+                    # inline and block phase-1 of batch N+1 - on a degraded
+                    # evening that pushed every card past the 10th by 16s+.
+                    # Phase-2 passes are collected and executed after all
+                    # phase-1 batches are yielded, so first cards for the
+                    # WHOLE result arrive within seconds.
+                    geo_update_tasks.append((start, stop, batch_id))
+
+                for start, stop, batch_id in geo_update_tasks:
                     try:
                         await _enrich_search_coordinates(
                             database_path, stream_result, limit=stop - start, offset=start,

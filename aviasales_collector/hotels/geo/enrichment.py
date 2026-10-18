@@ -189,7 +189,11 @@ async def _enrich_search_coordinates(path: str | Path, result: dict[str, Any], l
             schema_offers = [offer for offer in hotel.get("offers", [])
                              if (urlsplit(str(offer.get("deeplink") or "")).hostname or "").casefold().endswith(
                                  ("tutu.ru", "ostrovok.ru", "sutochno.ru"))]
-            if sravni_records and schema_offers:
+            # 2026-10-18: the deeplink JSON-LD fetch (tutu/ostrovok pages,
+            # ~1.2s per wave) does not affect coordinates or the render
+            # gate - phase 1 skips it; the full pass (phase 2 / regular
+            # enrichment) fetches it as before.
+            if sravni_records and schema_offers and not coordinate_only:
                 stage_started = time.perf_counter()
                 provider_detail = await asyncio.to_thread(
                     _profiled_worker_call, _provider_schema_detail, path, hotel, city,
