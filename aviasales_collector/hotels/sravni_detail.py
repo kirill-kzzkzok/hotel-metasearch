@@ -236,14 +236,31 @@ def _load_search_query(database_path: str | Path, search_id: str) -> dict[str, A
     return payload if isinstance(payload, dict) else {}
 
 
-def _has_metadata(database_path: str | Path, search_id: str, source_hotel_id: str) -> bool:
+def _has_metadata(database_path: str | Path, search_id: str, source_hotel_id: str,
+                  max_age_seconds: float = 3600.0) -> bool:
+    """True for a fact row, or for a fresh negative marker.
+
+    A failed page used to leave no row, so every cycle re-fetched the same
+    broken page; with the marker it is skipped for one hour, then retried.
+    """
     with closing(_connect(database_path)) as connection:
         row = connection.execute(
-            "SELECT 1 FROM hotel_provider_metadata "
-            "WHERE search_id=? AND source='sravniotel' AND source_hotel_id=? AND provider='sravniotel' LIMIT 1",
+            "SELECT metadata_json FROM hotel_provider_metadata "
+            "WHERE search_id=? AND source='sravniotel' AND source_hotel_id=? AND provider='sravniotel' "
+            "ORDER BY retrieved_at DESC LIMIT 1",
             (search_id, str(source_hotel_id)),
         ).fetchone()
-    return row is not None
+    if row is None:
+        return False
+    payload = json.loads(row[0]) if row[0] else {}
+    if not isinstance(payload, dict) or payload.get("source") != "sravniotel_failed_pages":
+        return True
+    try:
+        retrieved_at = datetime.fromisoformat(str(payload.get("retrieved_at")))
+        age = (datetime.now(timezone.utc) - retrieved_at).total_seconds()
+    except (TypeError, ValueError):
+        return True
+    return age < max_age_seconds
 
 
 def enrich_sravni_hotel_pages(database_path: str | Path, search_id: str,

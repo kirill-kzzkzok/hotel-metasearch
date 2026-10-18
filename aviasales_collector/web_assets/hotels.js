@@ -1657,8 +1657,6 @@ function render(data) {
     if (reviewLevel) addText(meta, "review-level", reviewLevel);
     const ratingDescription = hotel.rating_description || hotel.property_details?.rating_description;
     if (ratingDescription) addText(meta, "rating-description", ratingDescription);
-    const reviewSummaryLine = hotel.review_summary_line;
-    if (reviewSummaryLine) addText(context, "review-summary", `«${reviewSummaryLine}»`);
     if (hotel.review_stats?.length > 1) {
       const sources = hotel.review_stats.filter((item) => Number(item?.rating) > 0 && item.source !== review?.source)
         .map((item) => `${sourceLabels[item.source] || item.source}: ${Number(item.rating).toFixed(1)}${item.rating_scale ? `/${item.rating_scale}` : ""}${Number(item.reviews_count) > 0 ? ` · ${Number(item.reviews_count).toLocaleString("ru-RU")}` : ""}`);
@@ -1676,6 +1674,11 @@ function render(data) {
       addText(context, "stay-context-line",
         `${dateLabel(data.query.check_in)} — ${dateLabel(data.query.check_out)} · ${nights} ${plural(nights, "ночь", "ночи", "ночей")}`);
     }
+    // 2026-10-18: moved below the context declaration - the previous spot
+    // referenced `context` before initialization (TDZ ReferenceError that
+    // would abort the whole render as soon as the field arrives).
+    const reviewSummaryLine = hotel.review_summary_line;
+    if (reviewSummaryLine) addText(context, "review-summary", `«${reviewSummaryLine}»`);
     const centerRaw = hotel.location?.distance_to_center_km;
     const centerDistance = Number(centerRaw);
     if (hasDistance(centerRaw)) {
