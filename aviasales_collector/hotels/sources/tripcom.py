@@ -193,7 +193,7 @@ def _tripcom_collect_visible_cards(page: Any, cards: Any, result_panel: Any,
                                    max_cards: int | None = None,
                                    loading_timeout_seconds: float = 15,
                                    stable_end_quiet_seconds: float = 0.0,
-                                   pagination_idle_wait_seconds: float = 1.6,
+                                   pagination_idle_wait_seconds: float = 1.0,
                                    after_wait: Any = None) -> tuple[dict[str, dict[str, Any]], bool, str | None, dict[str, Any]]:
     """Collect a virtualized result list until its scroll end is stable.
 
@@ -1438,7 +1438,7 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                     # the initial DOM has settled without exposing a pending
                     # request. Keep a bounded grace window before declaring
                     # five initial cards to be the complete inventory.
-                    stable_end_quiet_seconds=8.0,
+                    stable_end_quiet_seconds=6.0,
                 )
                 current_stage = "results_collection"
                 timings["collection_ms"] = round((time.perf_counter() - stage_started) * 1000, 1)

@@ -26,8 +26,12 @@ from .tripcom_rates import (
 
 
 TRIPCOM_RATE_FETCH_TEMPLATE_TIMEOUT_SECONDS = 20.0
-TRIPCOM_RATE_FETCH_PER_HOTEL_TIMEOUT_SECONDS = 30.0
-TRIPCOM_RATE_FETCH_INTER_REQUEST_DELAY_SECONDS = 0.7
+TRIPCOM_RATE_FETCH_PER_HOTEL_TIMEOUT_SECONDS = 15.0
+# 2026-10-18: 0.7 -> 0.35. With 4 parallel tabs the global request-schedule
+# lock serializes fetch+pause, so the effective request rate stays as gentle
+# as the old single-tab cadence while latency overlaps across tabs; measured
+# pool span was 454s for 100 ok outcomes (4.5s/hotel) - the pause dominated.
+TRIPCOM_RATE_FETCH_INTER_REQUEST_DELAY_SECONDS = 0.35
 TRIPCOM_RATE_FETCH_MAX_PAYLOAD_BYTES = 32 * 1024 * 1024
 
 _RATE_FETCH_URL = "https://ru.trip.com" + TRIPCOM_RATE_ENDPOINT_PATH
