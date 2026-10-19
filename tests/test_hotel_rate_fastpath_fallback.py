@@ -363,7 +363,12 @@ def test_repeated_persist_does_not_duplicate_observations(tmp_path):
             "SELECT status FROM hotel_room_rate_fetch WHERE search_id='search-1'",
         ).fetchall()
     assert count == 2  # not 4: no duplicate observations on repeated persist
-    assert fetch_rows == [("ok",), ("ok",)]  # terminal history is append-only
+    # 2026-10-19 (live Phase C evidence): replaying the SAME terminal record
+    # (identical observed_at tuple) is idempotent - it replaces its row
+    # instead of appending. The old append-only expectation accumulated 100
+    # duplicated ok rows in a single live search via the
+    # publish-before-reviews double callback.
+    assert fetch_rows == [("ok",)]  # replayed terminal record collapsed
 
 
 def test_queued_rows_are_replanned_by_the_next_request(monkeypatch, tmp_path, fast_path):

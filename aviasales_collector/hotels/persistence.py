@@ -127,6 +127,29 @@ def persist_tripcom_room_rates(path: str | Path, search_id: str,
              operation, error_type, _sanitize_enrichment_error_message(error_message),
              max(0, int(attempt)), max(0, int(retry_count))),
         )
+        # B13 (live Phase C evidence, 2026-10-19): the publish-before-reviews
+        # flow re-persists the SAME terminal record (rate first, the
+        # review-enriched item second). Replaying an identical terminal tuple
+        # (same observed_at) must collapse to the newest row, not append a
+        # duplicate - a live search accumulated 100 duplicated ok rows from
+        # this. A genuinely new observation (different observed_at) still
+        # appends as a separate history row.
+        connection.execute(
+            """DELETE FROM hotel_room_rate_fetch
+               WHERE search_id=? AND source='trip_com' AND source_hotel_id=?
+                 AND check_in=? AND check_out=? AND adults=? AND children_count=?
+                 AND attempt=? AND retry_count=? AND observed_at=? AND status=?
+                 AND id < (SELECT MAX(id) FROM hotel_room_rate_fetch
+                           WHERE search_id=? AND source='trip_com' AND source_hotel_id=?
+                             AND check_in=? AND check_out=? AND adults=? AND children_count=?
+                             AND attempt=? AND retry_count=? AND observed_at=? AND status=?)""",
+            (search_id, source_hotel_id, inventory["check_in"], inventory["check_out"],
+             inventory["adults"], inventory.get("children_count", 0),
+             max(0, int(attempt)), max(0, int(retry_count)), fetched_at, fetch_status,
+             search_id, source_hotel_id, inventory["check_in"], inventory["check_out"],
+             inventory["adults"], inventory.get("children_count", 0),
+             max(0, int(attempt)), max(0, int(retry_count)), fetched_at, fetch_status),
+        )
         for rate in rates:
             if not isinstance(rate, dict) or not rate.get("provider_rate_id"):
                 continue
