@@ -700,11 +700,10 @@ def _tripcom_empty_inventory_shell(hotels: list[dict[str, Any]],
     for item in requests:
         if not isinstance(item, dict):
             continue
-        if item.get("response_has_data") is True:
-            payload_seen = True
-            break
-        response_bytes = item.get("response_bytes")
-        if isinstance(response_bytes, (int, float)) and response_bytes > 1000:
+        # B04: only a data object without the spider flag proves real
+        # inventory. A >1000-byte body is no longer accepted as evidence:
+        # error-shaped and protection bodies can be arbitrarily large.
+        if item.get("response_has_data") is True and item.get("spider_action_error_code") is None:
             payload_seen = True
             break
     if payload_seen:
@@ -836,15 +835,31 @@ def _tripcom_browser_search(query: dict[str, Any], profile: Path, *,
                             # no ``data`` payload.  Keep this distinction in
                             # the audit so a source-side empty continuation is
                             # never mistaken for natural pagination exhaustion.
+                            # B04: htlSpiderActionErrorCode marks spider
+                            # protection even under HTTP 200, and byte size
+                            # alone is not proof of inventory - an
+                            # error-shaped body over 1000 bytes used to count
+                            # as a "payload seen". Only a data object free of
+                            # the spider flag qualifies.
                             try:
                                 payload = response.json()
                                 record["response_top_level_keys"] = (
                                     list(payload.keys())[:20]
                                     if isinstance(payload, dict) else []
                                 )
-                                record["response_has_data"] = bool(
-                                    isinstance(payload, dict) and payload.get("data")
+                                data = payload.get("data") if isinstance(payload, dict) else None
+                                spider_code = (
+                                    data.get("htlSpiderActionErrorCode")
+                                    if isinstance(data, dict) else None
+                                ) or (
+                                    payload.get("htlSpiderActionErrorCode")
+                                    if isinstance(payload, dict) else None
                                 )
+                                if spider_code is not None:
+                                    record["spider_action_error_code"] = spider_code
+                                    record["response_has_data"] = False
+                                else:
+                                    record["response_has_data"] = bool(data)
                             except Exception:
                                 record["response_has_data"] = None
                     except Exception as exc:
