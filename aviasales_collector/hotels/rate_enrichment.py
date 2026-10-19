@@ -9,7 +9,7 @@ import sqlite3
 import time
 from contextlib import closing
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .models import HotelSearchOperationError, utc_now
 from .persistence import (_sanitize_enrichment_error_message,
@@ -84,6 +84,29 @@ def _tripcom_source_city_id(database_path: str | Path, search_id: str,
     return fallback if fallback.isdigit() else None
 
 
+_RATE_STATUS_BLOCKING = frozenset({"blocked"})
+_RATE_STATUS_SATISFIED = frozenset({"ok", "no_rates", "rate_inventory_absent"})
+
+
+def _aggregate_rate_status(outcomes: Iterable[dict[str, Any]]) -> str:
+    """One semantic aggregator for fresh and reused rate outcomes.
+
+    B02: a terminal timeout/invalid/http/error outcome used to aggregate to
+    plain "ok" in the no-new-tasks branch, so repeated polls reported
+    successful rate completion with no usable rate. Provider success, valid
+    empty inventory, timeout/invalid and blocked stay distinct here.
+    """
+    statuses = [str(item.get("status") or "unknown") for item in outcomes]
+    if not statuses:
+        return "ok"
+    if any(status in _RATE_STATUS_BLOCKING for status in statuses):
+        return "blocked"
+    if all(status in _RATE_STATUS_SATISFIED for status in statuses):
+        return "ok"
+    return "partial"
+
+
+
 async def enrich_tripcom_room_rates(
     database_path: str | Path, search_id: str, result: dict[str, Any],
     payload: dict[str, Any], wanted: set[str] | None,
@@ -117,7 +140,8 @@ async def enrich_tripcom_room_rates(
     log_search_timeline(search_id, "rate_tasks_discovered", hotels=len(all_tasks),
                         requested=len(wanted) if wanted is not None else "all",
                         concurrency=payload.get("concurrency", 5))
-    # Room-rate fetches persist terminal outcomes (blocked, timeout,
+    
+# Room-rate fetches persist terminal outcomes (blocked, timeout,
     # no-rates, and successful inventories). Reuse the newest terminal
     # row for this exact booking context so a rerender, coordinate refresh,
     # or a second client request cannot create another identical source
@@ -183,7 +207,7 @@ async def enrich_tripcom_room_rates(
                     refreshed_by_id[str(record.get("source_hotel_id"))] = record
         return {
             "search_id": search_id,
-            "status": "blocked" if any(item["status"] == "blocked" for item in reused_outcomes.values()) else "ok",
+            "status": _aggregate_rate_status(reused_outcomes.values()),
             "concurrency": payload.get("concurrency", 5),
             "hotels": [{"source_hotel_id": hotel_id,
                         "room_options": refreshed_by_id.get(hotel_id, {}).get("room_options", []),
@@ -366,10 +390,7 @@ async def enrich_tripcom_room_rates(
     outcomes_by_id.update(reused_outcomes)
     return {
         "search_id": search_id,
-        "status": "blocked" if any(item.get("status") == "blocked" for item in outcomes_by_id.values())
-            else "ok" if all(item.get("status") in {"ok", "no_rates", "rate_inventory_absent"}
-                             for item in outcomes_by_id.values())
-            else "partial",
+        "status": _aggregate_rate_status(outcomes_by_id.values()),
         "concurrency": payload.get("concurrency", 5),
         "hotels": [{"source_hotel_id": hotel_id,
                     "room_options": refreshed_by_id.get(hotel_id, {}).get("room_options", []),
