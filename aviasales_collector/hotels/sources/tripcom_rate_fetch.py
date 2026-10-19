@@ -173,22 +173,14 @@ async def collect_tripcom_room_rates_via_fetch(
             await page.wait_for_timeout(1500)
             await page.evaluate("tpl => { window.__rateTemplate = tpl; }", template)
 
-            # 2026-10-15: parallel tabs. The sequential loop (one fetch, then
-            # a fixed pause) needed ~3.2s per hotel - 150 hotels = 8 minutes.
-            # Workers share ONE context (one browser, one profile); a global
-            # request-schedule lock keeps the inter-request pause so the
-            # request rate stays as gentle as before, latency is simply
-            # overlapped with other tabs' waiting.
+            # B12 (2026-10-19): ONE stable headed rate page. The previous
+            # worker-tab pool (up to 4 visible tabs) never produced real
+            # fetch concurrency - a single global schedule lock serialized
+            # fetch+pause across all tabs anyway - while adding navigation
+            # latency and extra page-failure surface. All fetches now reuse
+            # this one page with the existing bounded pacing.
             _REQUEST_SCHEDULE_LOCK = asyncio.Lock()
-            effective_concurrency = max(1, min(int(concurrency or 1), 4, len(hotels)))
             worker_pages = [page]
-            for _ in range(effective_concurrency - 1):
-                try:
-                    worker_pages.append(await context.new_page())
-                    await worker_pages[-1].goto("https://ru.trip.com/", wait_until="domcontentloaded", timeout=45000)
-                    await worker_pages[-1].evaluate("tpl => { window.__rateTemplate = tpl; }", template)
-                except Exception:
-                    break
 
             async def _fetch_one(worker_page, index, hotel):
                 hotel_id = str(hotel.get("source_hotel_id") or "")
@@ -324,45 +316,56 @@ async def collect_tripcom_room_rates_via_fetch(
                             item["error_message"] = error_message
                         item["diagnostics"] = diagnostics
                 results[index] = item
-                # 2026-10-17: review enrichment via the site's own comment
-                # endpoint (in-page XHR, same as the rate fetch - no detail
-                # pages). One request per hotel, only for successful rates.
-                if item.get("status") == "ok":
-                    comment_page = worker_pages[index % len(worker_pages)]
-                    try:
-                        comment_out = await asyncio.wait_for(
-                            comment_page.evaluate(_COMMENT_JS, hotel_id), timeout=20)
-                        comment_payload = None
-                        if comment_out and comment_out.get("status") == 200 and comment_out.get("payloadJson"):
-                            comment_payload = json.loads(comment_out["payloadJson"])
-                        comment_data = (comment_payload or {}).get("data")                             if isinstance(comment_payload, dict) else None
-                        if isinstance(comment_data, dict):
-                            rating = comment_data.get("commentRating") or {}
-                            subscores = []
-                            for key, label in (("ratingLocation", "Местоположение"),
-                                               ("ratingFacility", "Удобства"),
-                                               ("ratingService", "Сервис"),
-                                               ("ratingRoom", "Чистота")):
-                                value = rating.get(key)
-                                if isinstance(value, (int, float)) and 0 < value <= 10:
-                                    subscores.append({"name": label, "score": float(value)})
-                            review_tags = [
-                                {"name": str(tag.get("name") or ""), "count": int(tag.get("commentCount") or 0)}
-                                for tag in (comment_data.get("commentTagList") or [])
-                                if isinstance(tag, dict) and tag.get("name")]
-                            item["review_info"] = {
-                                "rating_subscores": subscores or None,
-                                "review_level": rating.get("commentLevel"),
-                                "reviews_total": comment_data.get("totalCount"),
-                                "review_tags": review_tags[:8] or None,
-                            }
-                    except Exception:
-                        pass  # Review enrichment is best-effort; rates stay intact.
                 if on_result is not None:
+                    # B13: publish the rate immediately - it is terminal now.
+                    # Optional review enrichment used to run BEFORE this
+                    # callback (up to a 20s comment wait per hotel), keeping
+                    # genuine rates invisible behind best-effort reviews.
                     if item.get("status") not in {"ok", "no_rates", "rate_inventory_absent"}:
                         item.setdefault("error_type", item.get("reason") or item.get("status") or "error")
                         item.setdefault("error_message", item.get("reason") or item.get("status") or "Enrichment failed")
-                    await on_result(index, item)
+                    await on_result(index, dict(item))
+                    # B13 part 2: optional review enrichment runs AFTER the
+                    # rate is published, as its own best-effort update (a
+                    # stalled comment request can no longer hide a genuine
+                    # rate). The review callback re-persists the enriched row.
+                    if item.get("status") == "ok":
+                        comment_page = worker_pages[index % len(worker_pages)]
+                        try:
+                            comment_out = await asyncio.wait_for(
+                                comment_page.evaluate(_COMMENT_JS, hotel_id), timeout=20)
+                            comment_payload = None
+                            if comment_out and comment_out.get("status") == 200 and comment_out.get("payloadJson"):
+                                comment_payload = json.loads(comment_out["payloadJson"])
+                            comment_data = ((comment_payload or {}).get("data")
+                                            if isinstance(comment_payload, dict) else None)
+                            if isinstance(comment_data, dict):
+                                rating = comment_data.get("commentRating") or {}
+                                subscores = []
+                                for key, label in (("ratingLocation", "Местоположение"),
+                                                   ("ratingFacility", "Удобства"),
+                                                   ("ratingService", "Сервис"),
+                                                   ("ratingRoom", "Чистота")):
+                                    value = rating.get(key)
+                                    if isinstance(value, (int, float)) and 0 < value <= 10:
+                                        subscores.append({"name": label, "score": float(value)})
+                                review_tags = [
+                                    {"name": str(tag.get("name") or ""), "count": int(tag.get("commentCount") or 0)}
+                                    for tag in (comment_data.get("commentTagList") or [])
+                                    if isinstance(tag, dict) and tag.get("name")]
+                                review_info = {
+                                    "rating_subscores": subscores or None,
+                                    "review_level": rating.get("commentLevel"),
+                                    "reviews_total": comment_data.get("totalCount"),
+                                    "review_tags": review_tags[:8] or None,
+                                }
+                                enriched_item = dict(item)
+                                enriched_item["review_info"] = review_info
+                                results[index] = enriched_item
+                                if on_result is not None:
+                                    await on_result(index, dict(enriched_item))
+                        except Exception:
+                            pass  # Review enrichment is best-effort; the rate stays published.
         finally:
             try:
                 await context.close()
