@@ -676,7 +676,7 @@ async function loadMapCoordinates() {
     const response = await fetch("/api/hotels/search/" + encodeURIComponent(searchAtStart.search_id) + "/coordinates", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({room_mode: searchAtStart.query.room_mode || "all", stream: true,
-        hotel_keys: pendingHotelKeys, batch_size: 25}),
+        hotel_keys: pendingHotelKeys, batch_size: 20}),
       signal: requestController.signal,
     });
     if (!response.ok || !response.body) {
