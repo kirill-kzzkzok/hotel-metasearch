@@ -62,11 +62,17 @@ def test_trip_rates_use_trip_city_id_when_sravni_geo_id_is_missing(monkeypatch, 
     assert result["hotels"][0]["enrichment"]["status"] == "no_rates"
 
 
-def test_trip_rate_city_id_falls_back_to_valid_search_geo_id_when_trip_raw_page_has_none(tmp_path):
+def test_trip_rate_city_id_never_falls_back_to_sravni_geo_id(tmp_path):
+    """B05: the search geo_id is a Sravni namespace id, not a Trip cityId.
+
+    Without a Trip-resolved sourceCityId there is no valid Trip city
+    identity, so the helper must return None instead of substituting the
+    Sravni geo_id (which used to leak into Trip rate navigation).
+    """
     database_path = tmp_path / "rates.sqlite3"
     _create_rate_test_database(database_path, source_city_id=None)
 
-    assert rate_enrichment._tripcom_source_city_id(database_path, "search-1", "2658853") == "2658853"
+    assert rate_enrichment._tripcom_source_city_id(database_path, "search-1", "2658853") is None
     assert rate_enrichment._tripcom_source_city_id(database_path, "search-1", None) is None
 
 

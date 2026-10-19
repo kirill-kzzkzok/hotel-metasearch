@@ -94,7 +94,11 @@ async def _capture_rate_template(page: Any, hotel: dict[str, Any]) -> dict[str, 
     page.on("request", lambda req: captured.append(req.post_data or "")
             if TRIPCOM_RATE_ENDPOINT_PATH in req.url else None)
     hotel_id = str(hotel.get("source_hotel_id") or "")
-    city_id = str(hotel.get("city_id") or "1356")
+    # B05: cityId must be a Trip-resolved namespace id. The hardcoded 1356
+    # used to leak into every capture without a real mapping.
+    city_id = str(hotel.get("city_id") or "")
+    if not hotel_id or not city_id.isdigit():
+        return None
     # Capture with the task's own occupancy so the template's childInfoItems
     # block matches the guest composition; per-task fields are overwritten on
     # every fetch anyway, this keeps the captured head faithful.

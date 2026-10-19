@@ -63,6 +63,36 @@ def _persist_rate_task_lifecycle(database_path: str | Path, search_id: str,
         connection.commit()
 
 
+
+
+def _finalize_aborted_rate_tasks(database_path: str | Path, search_id: str,
+                                 tasks: list[dict[str, Any]], query: dict[str, Any]) -> None:
+    """B03: terminalize queued accounting rows for work the pool never ran.
+
+    A crashed fast path used to answer with response-only not_started stubs
+    while the queued rows written before the pool stayed queued forever:
+    progress and response disagreed and reloads rescheduled work that had
+    already been reported as finished-with-failure. Terminalize every queued
+    row for these task ids with status=not_started / rate_pool_aborted.
+    """
+    if not tasks:
+        return
+    task_ids = [str(task["source_hotel_id"]) for task in tasks]
+    placeholders = ",".join("?" for _ in task_ids)
+    with closing(_profiled_sqlite_connect(str(database_path), timeout=10)) as connection:
+        connection.execute(
+            f"""UPDATE hotel_room_rate_fetch SET status='not_started',
+                error_type='rate_pool_aborted',
+                observed_at=? WHERE search_id=? AND source='trip_com'
+                AND source_hotel_id IN ({placeholders})
+                AND check_in=? AND check_out=? AND adults=? AND children_count=?
+                AND status IN ('queued','running')""",
+            [utc_now(), search_id, *task_ids, query["check_in"], query["check_out"],
+             query["adults"], query.get("children_count", 0)],
+        )
+        connection.commit()
+
+
 def _tripcom_source_city_id(database_path: str | Path, search_id: str,
                             query_city_id: Any) -> str | None:
     """Read Trip.com's own city id; Sravni geo ids are a different namespace."""
@@ -80,8 +110,9 @@ def _tripcom_source_city_id(database_path: str | Path, search_id: str,
         source_city_id = raw_page.get("sourceCityId") if isinstance(raw_page, dict) else None
         if str(source_city_id or "").isdigit():
             return str(source_city_id)
-    fallback = str(query_city_id or "")
-    return fallback if fallback.isdigit() else None
+    # B05: no Trip-resolved city identity, no request. The search geo_id is
+    # a Sravni namespace id and must never be substituted for a Trip city.
+    return None
 
 
 _RATE_STATUS_BLOCKING = frozenset({"blocked"})
@@ -137,6 +168,13 @@ async def enrich_tripcom_room_rates(
                  for hotel in trip_hotels]
     if not all_tasks:
         return {"search_id": search_id, "status": "no_tripcom_hotels", "hotels": []}
+    if trip_city_id is None:
+        # B05: no Trip-resolved city identity. Launching the rate template
+        # capture without a real Trip cityId would silently substitute a
+        # Sravni geo_id (or the hardcoded 1356) into Trip navigation.
+        log_search_timeline(search_id, "rate_city_unresolved", reason="trip_city_id_missing")
+        return {"search_id": search_id, "status": "unavailable", "hotels": [],
+                "reason": "Trip.com city mapping unavailable for this search"}
     log_search_timeline(search_id, "rate_tasks_discovered", hotels=len(all_tasks),
                         requested=len(wanted) if wanted is not None else "all",
                         concurrency=payload.get("concurrency", 5))
@@ -370,10 +408,17 @@ async def enrich_tripcom_room_rates(
         _ACTIVE_SEARCH_TIMELINE_ID.reset(timeline_token)
         TRIP_PROFILE_LOCK.release()
     # Pad a short/empty fast-path result with not_started stubs so the
-    # response always carries one outcome per task (hotels stay queued).
+    # response always carries one outcome per task. B03: those stubs are
+    # now also persisted as terminal accounting rows (status=not_started,
+    # error_type=rate_pool_aborted) so a finished response can never leave
+    # orphaned queued/running rows; the task_ids no longer match a live
+    # queued row, so a later cycle reschedules them as new tasks.
     if len(enriched) < len(tasks):
         enriched = list(enriched) + [{"status": "not_started"}
                                      for _ in range(len(tasks) - len(enriched))]
+        await asyncio.to_thread(
+            _finalize_aborted_rate_tasks, database_path, search_id, tasks, query,
+        )
     for outcome in enriched:
         outcome.pop("inventory", None)
         outcome.pop("property_details", None)
