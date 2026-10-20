@@ -48,7 +48,24 @@ def _persist_rate_task_lifecycle(database_path: str | Path, search_id: str,
     """
     if not tasks:
         return
+    # B03-live (2026-10-19): a replan cycle used to INSERT new queued rows
+    # while previous queued rows of the same booking context stayed - live
+    # searches accumulated 3 identical queued rows per hotel (584 rows for
+    # 150 tasks). Replace stale queued/running rows of the same context
+    # instead of accumulating; terminal rows are never touched here.
     with closing(_profiled_sqlite_connect(str(database_path), timeout=10)) as connection:
+        placeholders = ",".join("?" for _ in tasks)
+        connection.execute(
+            f"""DELETE FROM hotel_room_rate_fetch
+                WHERE search_id=? AND source='trip_com'
+                  AND source_hotel_id IN ({placeholders})
+                  AND check_in=? AND check_out=? AND adults=? AND children_count=?
+                  AND attempt=? AND retry_count=? AND status IN ('queued','running')""",
+            [search_id, *[str(task["source_hotel_id"]) for task in tasks],
+             query["check_in"], query["check_out"], query["adults"],
+             query.get("children_count", 0),
+             int(tasks[0].get("attempt", 1)), int(tasks[0].get("retry_count", 0))],
+        )
         connection.executemany(
             """INSERT INTO hotel_room_rate_fetch
             (search_id,source,source_hotel_id,check_in,check_out,adults,children_count,status,
